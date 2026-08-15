@@ -1,0 +1,9 @@
+# PowerShell / editor noise
+*.ps1xml
+.vscode/
+.idea/
+
+# Local experiments
+scratch/
+*.local.ps1
+probe.txt
