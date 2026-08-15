@@ -56,10 +56,13 @@
     Skip the confirmation screen that would otherwise let you change grouping and order before
     anything opens.
 
+.PARAMETER All
+    Reopen everything found, skipping the list you would otherwise choose from. Naming sessions
+    with -Include has the same effect: the choice is already made.
+
 .PARAMETER Pick
-    Choose which sessions to reopen in an interactive list — arrows to move, space to toggle,
-    v to read a conversation, enter to confirm. The list needs a keyboard, so when the script is
-    driven by another program it opens a terminal tab and puts the list there instead.
+    Accepted and ignored. Choosing from the list is the default; this exists so the old spelling
+    is not mistaken for an argument meant for claude.
 
 .PARAMETER DryRun
     List what would be reopened and stop.
@@ -93,7 +96,12 @@ param(
     [string]$Grouping = 'single',
     [ValidateSet('oldest', 'newest')]
     [string]$Order = 'oldest',
+    [switch]$All,
+
+    # Accepted and ignored: picking is the default now. Declared so that a -Pick typed from
+    # memory is not swept into $ClaudeArgs and handed to claude, which would not understand it.
     [switch]$Pick,
+
     [switch]$NoPrompt,
     [switch]$DryRun,
 
@@ -111,10 +119,10 @@ function Show-Usage {
         '',
         'Reopens the Claude Code sessions you actually worked on, one terminal tab each.',
         '',
-        "  $me <days> [-Pick] [-DryRun] [-Include <id>] [-Exclude <id>] [-WindowName <name>] [claude flags...]",
+        "  $me <days> [-All] [-DryRun] [-Include <id>] [-Exclude <id>] [-WindowName <name>] [claude flags...]",
         '',
         '  <days>            how far back to look. 1 covers yesterday and today, 0 today only.',
-        '  -Pick             choose from an interactive list instead of reopening everything.',
+        '  -All              reopen everything, skipping the list you would otherwise choose from.',
         '  -DryRun           list what would reopen, open nothing.',
         '  -Include          reopen only these session ids, full or partial. Comma-separated.',
         '  -Exclude          session ids, full or partial, to leave alone. Comma-separated.',
@@ -126,8 +134,8 @@ function Show-Usage {
         '  claude flags      anything else is forwarded verbatim to each recovered session.',
         '',
         'Examples:',
-        "  $me 1                                    everything since yesterday midnight",
-        "  $me 3 -Pick                              pick from the last three days",
+        "  $me 1                                    choose from what you worked on since yesterday",
+        "  $me 3 -All                               reopen the last three days without choosing",
         "  $me 3 -DryRun                            list the last three days, open nothing",
         "  $me 3 -Include b47087de,eb3865e1         reopen just those two",
         "  $me 1 --dangerously-skip-permissions     reopen without permission prompts",
@@ -777,7 +785,9 @@ if ($skipped.Count -gt 0) {
 }
 if ($worked.Count -eq 0) { return }
 
-if ($Pick -and -not $DryRun) {
+# Choosing is the default. -All skips the list, and so does naming the sessions with -Include,
+# which is already a choice made.
+if (-not $All -and -not $DryRun -and $Include.Count -eq 0) {
     if ([Console]::IsInputRedirected) {
         Start-InteractiveConsole $PSBoundParameters
         return

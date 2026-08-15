@@ -8,19 +8,16 @@ Windows Terminal tab each.
 ```
 
 ```
-Sessions worked on since 2026-08-14 00:00: 8
-Already open, left alone: 9960f284
-  eb3865e1  08-14 00:54   25 prompts  C:\repos\trace-viewer
-            > I don't follow when this analysis is supposed to run: does it run live inside the
-              debugger, or are you talking about some external tool that pre-analyses the
-              binaries and generates the whitelist?
-  b47087de  08-14 01:23   18 prompts  C:\repos\billing-api  — retry-policy-consolidation
-            > the migration on the staging database has already been applied
-  b693b3c2  08-14 17:01    1 prompts  C:\repos\billing-api  — Remember connection dialog values
-            > silly request: I'd like the dialog that asks for the host and the account code to
-              remember what I entered last time, instead of making me type it on every connection
+Select the sessions to reopen — 8 of 8
+↑↓ move   space toggle   a all/none   v view conversation   enter reopen   esc cancel
+
+  [x] eb3865e1  08-14 00:54   25 prompts  C:\repos\trace-viewer
+> [x] b47087de  08-14 01:23   18 prompts  C:\repos\billing-api  — retry-policy-consolidation
+  [ ] fddb0d10  08-14 01:30    6 prompts  C:\repos\billing-api  — Crash reports from scheduled jobs
+  [x] b693b3c2  08-14 17:01    1 prompts  C:\repos\billing-api  — Remember connection dialog values
   ...
-Opening 8 tabs in a single window (-w 0)...
+
+  > the migration on the staging database has already been applied
 ```
 
 ## Why
@@ -80,40 +77,27 @@ function recover-sessions {
 }
 ```
 
-Then `recover-sessions 2 -Pick` from any directory. `@args` matters: it forwards everything,
+Then `recover-sessions 2` from any directory. `@args` matters: it forwards everything,
 including the bare day count and the flags meant for `claude`.
 
 ## Use
 
 ```powershell
 .\scripts\Recover-ClaudeSessions.ps1            # usage and examples, opens nothing
-.\scripts\Recover-ClaudeSessions.ps1 1          # everything worked on since yesterday midnight
+.\scripts\Recover-ClaudeSessions.ps1 1          # choose from what you worked on since yesterday
 .\scripts\Recover-ClaudeSessions.ps1 3          # go back three days
 .\scripts\Recover-ClaudeSessions.ps1 0          # today only
+.\scripts\Recover-ClaudeSessions.ps1 3 -All     # reopen all of it, no list
 .\scripts\Recover-ClaudeSessions.ps1 3 -DryRun  # list it, open nothing
 ```
 
 ### Picking
 
-Everything is reopened by default. To choose, add `-Pick`:
+Choosing is what happens by default, from the list shown above. Everything starts ticked,
+because the usual answer is still "all of it" and unticking two beats ticking twenty — but a
+recovery reopens somebody's whole afternoon, and that is worth a look before it happens.
 
-```
-Select the sessions to reopen — 5 of 8
-↑↓ move   space toggle   a all/none   v view conversation   enter reopen   esc cancel
-
-  [x] b47087de  08-14 01:23   18 prompts  C:\repos\billing-api  — retry-policy-consolidation
-> [x] eb3865e1  08-14 00:54   25 prompts  C:\repos\trace-viewer
-  [ ] fddb0d10  08-14 01:30    6 prompts  C:\repos\billing-api  — Crash reports arriving from scheduled jobs
-  [x] 73594b59  08-14 13:03   16 prompts  C:\repos\billing-api  — Silent rebuild call on startup
-  ...
-
-  > I don't follow when this analysis is supposed to run: does it run live inside the
-    debugger, or are you talking about some external tool that pre-analyses the
-    binaries and generates the whitelist?
-```
-
-Everything starts ticked, because the usual answer is still "all of it" and unticking two beats
-ticking twenty.
+`-All` skips the list. So does `-Include`, which is a choice already made.
 
 Two things do the identifying. The name after the dash is the title Claude Code gave the
 conversation — sessions started before that feature simply have none. Under the list is the
@@ -175,10 +159,22 @@ Anything after the day count is passed straight through to each recovered sessio
 .\scripts\Recover-ClaudeSessions.ps1 1 --model opus
 ```
 
+A useful one is `/remote-control`, which pairs a session with the Claude mobile app. Recovering
+over a remote desktop, it means every session you bring back stays reachable after you disconnect:
+
+```powershell
+.\scripts\Recover-ClaudeSessions.ps1 2 /remote-control
+```
+
+An argument beginning with `/` is executed by the resumed session as a command rather than read
+as text, so nothing else is needed. Note the asymmetry: this is for recovering *onto* a machine
+you are about to leave. Starting a recovery *from* the phone is a different matter — the picker
+is a console UI on a desktop you are not sitting at, so pass `-All` or `-Include` there.
+
 | Parameter       | Default |   |
 |-----------------|---------|---|
 | `-Days`         | `1`     | Calendar days back, also accepted as a bare leading number. `1` covers yesterday *and* today — the shape of an overnight crash. |
-| `-Pick`         | off     | Choose from an interactive list instead of reopening everything. |
+| `-All`          | off     | Reopen everything, skipping the list. `-Include` implies it. |
 | `-DryRun`       | off     | List what would reopen, open nothing. |
 | `-Include`      | —       | Reopen only these session ids, full or partial, comma-separated. |
 | `-Exclude`      | —       | Session ids, full or partial, to leave alone. |
@@ -223,8 +219,9 @@ and stripping it for good would leave a long-lived shell offering to reopen that
 the next run.
 
 The picker also needs a keyboard, and a script run by another program has none — its stdin is a
-pipe. Rather than refuse, `-Pick` opens a terminal tab and puts the list there, carrying the
-arguments it was given and excluding the session it was launched from.
+pipe. Rather than refuse, it opens a terminal tab and puts the list there, carrying the arguments
+it was given and excluding the session it was launched from. Pass `-All` or `-Include` if you
+want a tool-driven run to reopen without asking.
 
 ## Not Windows?
 

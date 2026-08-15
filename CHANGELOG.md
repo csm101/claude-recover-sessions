@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.0.0
+
+- Choosing is now the default: running the script shows the session list instead of reopening
+  everything. A recovery brings back a whole afternoon of work, which is worth a look first.
+- `-All` reopens without the list, taking over what the absence of `-Pick` used to mean.
+  `-Include` implies it — naming the sessions is already a choice.
+- `-Pick` is still accepted and does nothing. It is declared rather than dropped so that typing
+  it out of habit does not sweep it into the forwarded arguments and hand it to `claude`.
+
 ## 2.0.0
 
 - Dropped the Claude Code plugin: the `.claude-plugin` manifests, the `/recover-sessions` slash
