@@ -1,7 +1,7 @@
 {
   "name": "claude-recover-sessions",
   "displayName": "Recover Sessions",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Reopen every Claude Code session you actually worked on in the last N days, one Windows Terminal tab each. For getting back to work after a crash, a power cut or a reboot.",
   "author": {
     "name": "Carlo Sirna",

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- `/recover-sessions` now shows the picker instead of deciding for you. A tool call has no
+  keyboard, and the command used to work around that by skipping the interactive half entirely —
+  so the slash command, the way most people run this, silently reopened whatever it judged best.
+  `-Pick` under a redirected stdin now opens a terminal tab and puts the list there, carrying the
+  original arguments and excluding the session it was launched from.
+
 ## 1.0.0
 
 First release.

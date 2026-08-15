@@ -89,10 +89,14 @@ cd claude-recover-sessions
 
 ```
 /recover-sessions          print usage and examples, open nothing
-/recover-sessions 1        reopen everything since yesterday midnight
+/recover-sessions 1        pick from what you worked on since yesterday midnight
 /recover-sessions 3        go back three days
 /recover-sessions 0        today only
 ```
+
+The slash command opens the picker in a terminal tab and leaves the choosing to you. A tool call
+has no keyboard attached, so rather than deciding on your behalf the script hands the list a real
+console — the same one you get running it yourself.
 
 Reopening a week of work is not something to do by accident, so the bare command explains itself
 instead of guessing how far back you meant.
@@ -129,8 +133,11 @@ session's opening prompt, wrapped over up to ten lines rather than cut at the fi
 line of a prompt is usually a preamble, and what tells you which session this is tends to come
 after it. `-SampleLines` changes the limit.
 
-The picker needs a real console, so it is unavailable when Claude runs the command for you. There
-the equivalent is to list first and reopen a subset by id:
+When Claude runs the command for you the picker still appears — in a terminal tab it opens for
+the purpose, carrying the arguments you gave and excluding the session you asked from, so it
+cannot offer to reopen a copy of the conversation you are in.
+
+If you would rather not be asked at all, list first and reopen a subset by id:
 
 ```powershell
 ./scripts/Recover-ClaudeSessions.ps1 3 -DryRun

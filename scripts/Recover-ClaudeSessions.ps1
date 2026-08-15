@@ -58,8 +58,8 @@
 
 .PARAMETER Pick
     Choose which sessions to reopen in an interactive list — arrows to move, space to toggle,
-    enter to confirm. Needs a real console, so it is unavailable when the script is driven by
-    another program; use -DryRun with -Include there.
+    v to read a conversation, enter to confirm. The list needs a keyboard, so when the script is
+    driven by another program it opens a terminal tab and puts the list there instead.
 
 .PARAMETER DryRun
     List what would be reopened and stop.
@@ -639,6 +639,65 @@ function Get-TargetWindow($Session, [string]$Grouping) {
     }
 }
 
+# The picker and the arrangement screen need a keyboard, and a script invoked through a tool call
+# has none: its stdin is a pipe. Refusing there would mean the interactive half of this tool is
+# unreachable from the very command most people use, so instead it hands itself a real console —
+# a terminal tab running the same invocation, which the user then drives.
+#
+# $Bound is the script's own $PSBoundParameters, handed in on purpose: inside a function that
+# automatic variable describes the function's parameters, not the script's, and reading it here
+# would silently rebuild the command line without any of the flags the caller actually passed.
+function Start-InteractiveConsole($Bound) {
+    # Exclude is rebuilt rather than copied: the current session id has to join it, and emitting
+    # the parameter twice would be an error rather than a merge.
+    $excludeList = @($Exclude)
+    if ($env:CLAUDE_CODE_SESSION_ID -and $excludeList -notcontains $env:CLAUDE_CODE_SESSION_ID) {
+        $excludeList += $env:CLAUDE_CODE_SESSION_ID
+    }
+
+    $quoted = [System.Collections.Generic.List[string]]::new()
+
+    # Always passed by name: a day count given as a bare leading number never reached
+    # $PSBoundParameters, and the new console would silently fall back to the default.
+    $quoted.Add('-Days')
+    $quoted.Add([string]$Days)
+
+    foreach ($name in $Bound.Keys) {
+        if ($name -in 'Days', 'Exclude', 'ClaudeArgs') { continue }
+        $value = $Bound[$name]
+        if ($value -is [switch]) {
+            if ($value.IsPresent) { $quoted.Add("-$name") }
+            continue
+        }
+        if ($value -is [array]) {
+            $quoted.Add("-$name")
+            $quoted.Add((($value | ForEach-Object { Format-ShellArgument $_ }) -join ','))
+            continue
+        }
+        $quoted.Add("-$name")
+        $quoted.Add((Format-ShellArgument ([string]$value)))
+    }
+    if ($excludeList.Count -gt 0) {
+        $quoted.Add('-Exclude')
+        $quoted.Add((($excludeList | ForEach-Object { Format-ShellArgument $_ }) -join ','))
+    }
+    foreach ($arg in $ClaudeArgs) { $quoted.Add((Format-ShellArgument $arg)) }
+
+    $shell = Get-TabShell
+    $command = "& '{0}' {1}" -f $PSCommandPath, ($quoted -join ' ')
+    $savedEnv = Clear-InheritedClaudeEnv
+    try {
+        if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+            wt.exe -w $WindowName new-tab --title 'recover sessions' -d (Split-Path $PSCommandPath) $shell -NoLogo -NoExit -Command $command
+        } else {
+            Start-Process $shell -ArgumentList '-NoLogo', '-NoExit', '-Command', $command
+        }
+    } finally {
+        Restore-InheritedClaudeEnv $savedEnv
+    }
+    Write-Host 'Opened a terminal tab with the session picker — choose there.' -ForegroundColor Cyan
+}
+
 function Get-TabShell {
     foreach ($candidate in 'pwsh', 'powershell') {
         $found = Get-Command $candidate -ErrorAction SilentlyContinue
@@ -720,7 +779,7 @@ if ($worked.Count -eq 0) { return }
 
 if ($Pick -and -not $DryRun) {
     if ([Console]::IsInputRedirected) {
-        Write-Warning 'Nothing was opened: -Pick needs an interactive console. Run with -DryRun and reopen your choice with -Include <id> <id>.'
+        Start-InteractiveConsole $PSBoundParameters
         return
     }
     $worked = Invoke-SessionPicker $worked
