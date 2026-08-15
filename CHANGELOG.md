@@ -20,7 +20,9 @@ First release.
   sets the launch order within a window. Both are parameters too; `-NoPrompt` skips the screen,
   as does having no console to ask on.
 - `v` in the picker opens the highlighted conversation in a scrollable reader — messages only,
-  no tool calls — so a session can be identified before deciding to reopen it.
+  no tool calls — so a session can be identified before deciding to reopen it. Keystrokes made
+  while a transcript loads are discarded, leaving the picker requires confirmation, and an
+  unreadable transcript reports itself instead of taking the picker down.
 - Listings show the session's Claude Code title next to its working directory, and its opening
   prompt wrapped over up to ten lines (`-SampleLines`) instead of cut at the first.
 - `-Pick` opens an interactive list — arrows, space to toggle, enter to reopen — for choosing a

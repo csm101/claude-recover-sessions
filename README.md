@@ -146,6 +146,11 @@ A title and an opening prompt do not always settle it. Press `v` on a highlighte
 the conversation opens in a scrollable view — what you said, what Claude answered, in order,
 with tool calls and their output left out. `esc` returns to the list with your selection intact.
 
+Leaving the picker itself asks for confirmation, and keys pressed while a large transcript is
+loading are discarded rather than queued: an impatient escape typed during the wait would
+otherwise be spent the moment the reader opens, and the next one would land on the picker and
+cancel it.
+
 ### Windows and order
 
 Before anything opens, a screen asks how the tabs should be arranged:

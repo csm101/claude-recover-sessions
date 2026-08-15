@@ -404,11 +404,29 @@ function Get-ConversationDisplay($Messages, [int]$Width) {
     return , $lines
 }
 
+# Keys pressed while something slow is happening are not commands for the screen that appears
+# afterwards. Left in the buffer, an impatient escape typed during a long read would be consumed
+# the instant the reader opens, and the next one — the one meant to leave the reader — would
+# reach the picker and cancel it.
+function Clear-InputBuffer {
+    while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) }
+}
+
 function Show-Conversation($Session) {
     $width = [Math]::Max(60, (Get-ConsoleSize Width 120) - 1)
     Clear-Host
     Write-Host 'Reading the conversation…' -ForegroundColor DarkGray
-    $lines = Get-ConversationDisplay (Get-Conversation $Session.Path) $width
+
+    # A transcript this large is worth guarding: one malformed entry must not take the picker
+    # down with it, losing a selection the user has been building.
+    try {
+        $lines = Get-ConversationDisplay (Get-Conversation $Session.Path) $width
+    } catch {
+        $lines = [System.Collections.Generic.List[object]]::new()
+        $lines.Add(@{ Text = "Could not read this transcript: $($_.Exception.Message)"; Colour = @{ ForegroundColor = 'Red' } })
+    }
+
+    Clear-InputBuffer
     $offset = 0
 
     while ($true) {
@@ -437,17 +455,30 @@ function Show-Conversation($Session) {
             'PageDown'  { $offset += $viewport }
             'Home'      { $offset = 0 }
             'End'       { $offset = $maxOffset }
-            'Escape'    { return }
+            'Escape'    { Clear-InputBuffer; return }
             default {
                 switch ($key.KeyChar) {
                     'k' { $offset-- }
                     'j' { $offset++ }
-                    'q' { return }
+                    'q' { Clear-InputBuffer; return }
                     ' ' { $offset += $viewport }
                 }
             }
         }
     }
+}
+
+# Leaving the picker throws away a selection that took reading to build, so it is worth one key.
+function Confirm-Cancel {
+    Clear-Host
+    Write-Host 'Cancel and open nothing?' -ForegroundColor Yellow
+    Write-Host 'y to cancel — any other key goes back to the list' -ForegroundColor DarkGray
+    $answer = [Console]::ReadKey($true)
+    if ($answer.KeyChar -eq 'y' -or $answer.KeyChar -eq 'Y') {
+        Clear-Host
+        return $true
+    }
+    return $false
 }
 
 # Arrow keys to move, space to toggle, enter to confirm. Everything starts selected, because the
@@ -510,7 +541,7 @@ function Invoke-SessionPicker([object[]]$Sessions) {
                 $picked = @(for ($i = 0; $i -lt $Sessions.Count; $i++) { if ($chosen[$i]) { $Sessions[$i] } })
                 return $picked
             }
-            'Escape'    { Clear-Host; return $null }
+            'Escape'    { if (Confirm-Cancel) { return $null } }
             default {
                 switch ($key.KeyChar) {
                     'a' {
@@ -520,7 +551,7 @@ function Invoke-SessionPicker([object[]]$Sessions) {
                     'k' { if ($cursor -gt 0) { $cursor-- } }
                     'j' { if ($cursor -lt $Sessions.Count - 1) { $cursor++ } }
                     'v' { Show-Conversation $Sessions[$cursor] }
-                    'q' { Clear-Host; return $null }
+                    'q' { if (Confirm-Cancel) { return $null } }
                 }
             }
         }
