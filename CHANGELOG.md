@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.0
+
+- Dropped the Claude Code plugin: the `.claude-plugin` manifests, the `/recover-sessions` slash
+  command and the installers are gone, and the project is the PowerShell script alone.
+
+  The command added nothing. All it could do was launch the same script in a terminal tab, which
+  you can do yourself — and in the situation this exists for, the machine has just rebooted and
+  Claude Code is not running either. A profile function does the job better, and the README shows
+  one.
+
+  The script still knows it may be started from inside Claude Code and still handles that: the
+  inherited environment, the self-exclusion, and handing the picker a real console.
+
 ## 1.1.0
 
 - `/recover-sessions` now shows the picker instead of deciding for you. A tool call has no
