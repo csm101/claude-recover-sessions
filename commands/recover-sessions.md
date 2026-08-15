@@ -29,9 +29,14 @@ $script = if ($env:CLAUDE_PLUGIN_ROOT) {
 & $script <days> <forwarded flags>
 ```
 
-The script's own parameters are `-Days`, `-Pick`, `-DryRun`, `-Include`, `-Exclude` and
-`-WindowName`; anything else on the line goes to `claude`. Add `-DryRun` yourself if the user
-wants to see the list before anything opens.
+The script's own parameters are `-Days`, `-Pick`, `-DryRun`, `-Include`, `-Exclude`, `-Grouping`,
+`-Order`, `-SampleLines`, `-NoPrompt` and `-WindowName`; anything else on the line goes to
+`claude`. Add `-DryRun` yourself if the user wants to see the list before anything opens.
+
+If the user says how they want the windows arranged — one per project, everything together, most
+recent first — pass `-Grouping single|workdir|session` and `-Order oldest|newest`. The screen
+that would otherwise ask is skipped automatically when the script has no console, so what you
+pass is what happens.
 
 Do not pass `-Pick`: its interactive list needs a real console and cannot run through a tool
 call. When the user wants to choose rather than reopen everything, run `-DryRun`, show them the

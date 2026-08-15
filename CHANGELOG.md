@@ -15,6 +15,12 @@ First release.
   recovered sessions keep their UI colours and do not think they are nested.
 - Falls back to separate console windows when Windows Terminal is absent.
 - Called with no arguments, prints usage and examples instead of guessing how far back to go.
+- Before opening anything, an interactive screen asks how to arrange the tabs: `-Grouping`
+  spreads them over one window, one per working directory, or one per session, and `-Order`
+  sets the launch order within a window. Both are parameters too; `-NoPrompt` skips the screen,
+  as does having no console to ask on.
+- `v` in the picker opens the highlighted conversation in a scrollable reader — messages only,
+  no tool calls — so a session can be identified before deciding to reopen it.
 - Listings show the session's Claude Code title next to its working directory, and its opening
   prompt wrapped over up to ten lines (`-SampleLines`) instead of cut at the first.
 - `-Pick` opens an interactive list — arrows, space to toggle, enter to reopen — for choosing a

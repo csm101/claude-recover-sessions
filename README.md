@@ -107,7 +107,7 @@ Everything is reopened by default. To choose, add `-Pick`:
 
 ```
 Select the sessions to reopen — 5 of 8
-↑↓ move   space toggle   a all/none   enter reopen   esc cancel
+↑↓ move   space toggle   a all/none   v view conversation   enter reopen   esc cancel
 
   [x] b47087de  08-14 01:23   18 prompts  C:\repos\billing-api  — retry-policy-consolidation
 > [x] eb3865e1  08-14 00:54   25 prompts  C:\repos\trace-viewer
@@ -140,6 +140,39 @@ the equivalent is to list first and reopen a subset by id:
 Separate ids with commas, not spaces: a space-separated second id is taken for a forwarded
 `claude` argument instead.
 
+### Reading a conversation before deciding
+
+A title and an opening prompt do not always settle it. Press `v` on a highlighted session and
+the conversation opens in a scrollable view — what you said, what Claude answered, in order,
+with tool calls and their output left out. `esc` returns to the list with your selection intact.
+
+### Windows and order
+
+Before anything opens, a screen asks how the tabs should be arranged:
+
+```
+About to reopen 8 session(s) in 3 window(s).
+
+  g   grouping   one window per working directory
+  o   order      oldest prompt first — the most recent ends up active
+
+  enter reopen   esc cancel
+```
+
+`g` cycles the grouping — everything in one window, one window per working directory (so
+conversations about the same repository stay together), or one window per session. `o` flips the
+order within each window. The window count updates as you cycle, which is usually what decides
+it.
+
+Both are also parameters, and passing `-NoPrompt` skips the screen:
+
+```powershell
+./scripts/Recover-ClaudeSessions.ps1 3 -Grouping workdir -Order newest -NoPrompt
+```
+
+The screen is skipped automatically when the script has no console to ask on, so a tool-driven
+run uses whatever the parameters say.
+
 ### Forwarding arguments
 
 Anything after the day count is passed straight through to each recovered session:
@@ -163,6 +196,9 @@ The script underneath takes the same shape:
 | `-DryRun`       | off     | List what would reopen, open nothing. |
 | `-Include`      | —       | Reopen only these session ids, full or partial, comma-separated. |
 | `-SampleLines`  | `10`    | How many lines of each opening prompt to show. |
+| `-Grouping`     | `single`| `single`, `workdir` or `session` — how tabs are spread over windows. |
+| `-Order`        | `oldest`| `oldest` or `newest` — launch order within a window. |
+| `-NoPrompt`     | off     | Skip the grouping/order screen. |
 | `-Exclude`      | —       | Session ids, full or partial, to leave alone. |
 | `-WindowName`   | `0`     | Target window. `0` reuses the current one; any other string groups the tabs in a window of its own. |
 | *anything else* | —       | Forwarded verbatim to every `claude` invocation. |

@@ -43,6 +43,19 @@
     first line of a prompt is often just a preamble, so one line is rarely enough to recognise
     what the session was about.
 
+.PARAMETER Grouping
+    How the reopened sessions are spread over windows. 'single' (default) puts every tab in one
+    window, 'workdir' gives each working directory a window of its own so related conversations
+    stay together, 'session' gives every session its own window.
+
+.PARAMETER Order
+    Launch order within a window. 'oldest' (default) opens oldest first, which leaves the most
+    recent session as the active tab. 'newest' reverses it.
+
+.PARAMETER NoPrompt
+    Skip the confirmation screen that would otherwise let you change grouping and order before
+    anything opens.
+
 .PARAMETER Pick
     Choose which sessions to reopen in an interactive list — arrows to move, space to toggle,
     enter to confirm. Needs a real console, so it is unavailable when the script is driven by
@@ -76,7 +89,12 @@ param(
     [string[]]$Exclude = @(),
     [string[]]$Include = @(),
     [int]$SampleLines = 10,
+    [ValidateSet('single', 'workdir', 'session')]
+    [string]$Grouping = 'single',
+    [ValidateSet('oldest', 'newest')]
+    [string]$Order = 'oldest',
     [switch]$Pick,
+    [switch]$NoPrompt,
     [switch]$DryRun,
 
     # Everything not recognised above — including bare --flags — lands here and is handed to
@@ -101,7 +119,10 @@ function Show-Usage {
         '  -Include          reopen only these session ids, full or partial. Comma-separated.',
         '  -Exclude          session ids, full or partial, to leave alone. Comma-separated.',
         '  -SampleLines      how many lines of the opening prompt to show. Default 10.',
-        '  -WindowName       target window. 0 (default) reuses the current one.',
+        '  -Grouping         single (default) | workdir | session — how tabs spread over windows.',
+        '  -Order            oldest (default) | newest — launch order within a window.',
+        '  -NoPrompt         skip the screen that asks about grouping and order.',
+        '  -WindowName       target window when grouping is single. 0 (default) reuses the current one.',
         '  claude flags      anything else is forwarded verbatim to each recovered session.',
         '',
         'Examples:',
@@ -218,6 +239,7 @@ function Get-WorkedSession([System.IO.FileInfo]$Jsonl) {
     if ($times.Count -eq 0) { return $null }
     return [pscustomobject]@{
         Id        = $Jsonl.BaseName
+        Path      = $Jsonl.FullName
         Cwd       = Resolve-SessionCwd $Jsonl $cwds
         Title     = $title
         Prompts   = $times.Count
@@ -332,6 +354,102 @@ function Write-SessionSample($Session, [int]$Width, [int]$MaxLines, [string]$Ind
     }
 }
 
+# Only what was said: tool calls, their results and injected reminders are left out, because the
+# question the reader is answering is "which conversation was this", not "what did it run".
+function Get-Conversation([string]$Path) {
+    $messages = [System.Collections.Generic.List[object]]::new()
+    foreach ($line in [System.IO.File]::ReadLines($Path)) {
+        if ($line -notmatch '"type":"(user|assistant)"') { continue }
+        try { $entry = $line | ConvertFrom-Json } catch { continue }
+        if ($entry.isMeta -or $entry.toolUseResult) { continue }
+
+        $text = if ($entry.message.content -is [string]) {
+            $entry.message.content
+        } else {
+            (($entry.message.content | Where-Object { $_.type -eq 'text' }).text) -join "`n"
+        }
+        if (-not $text) { continue }
+        if ($entry.type -eq 'user' -and -not (Test-UserAuthored $text)) { continue }
+
+        $messages.Add([pscustomobject]@{
+            Role = $entry.type
+            When = if ($entry.timestamp) { ([datetime]$entry.timestamp).ToLocalTime() } else { $null }
+            Text = ($text -replace "`r", '')   # parenthesised: inside a method call the comma would split arguments
+        })
+    }
+    return , $messages
+}
+
+function Get-ConversationDisplay($Messages, [int]$Width) {
+    $lines = [System.Collections.Generic.List[object]]::new()
+    foreach ($message in $Messages) {
+        $who = if ($message.Role -eq 'user') { 'you' } else { 'claude' }
+        if ($message.When) { $who += '   ' + $message.When.ToString('MM-dd HH:mm') }
+        $lines.Add(@{
+            Text   = $who
+            Colour = @{ ForegroundColor = if ($message.Role -eq 'user') { 'Cyan' } else { 'DarkYellow' } }
+        })
+        foreach ($paragraph in ($message.Text -split "`n")) {
+            if (-not $paragraph.Trim()) {
+                $lines.Add(@{ Text = ''; Colour = @{} })
+                continue
+            }
+            foreach ($wrapped in @(Format-Wrapped $paragraph ($Width - 2) 5000)) {
+                $lines.Add(@{ Text = '  ' + $wrapped; Colour = @{} })
+            }
+        }
+        $lines.Add(@{ Text = ''; Colour = @{} })
+    }
+    if ($lines.Count -eq 0) { $lines.Add(@{ Text = '(nothing said in this session)'; Colour = @{} }) }
+    return , $lines
+}
+
+function Show-Conversation($Session) {
+    $width = [Math]::Max(60, (Get-ConsoleSize Width 120) - 1)
+    Clear-Host
+    Write-Host 'Reading the conversation…' -ForegroundColor DarkGray
+    $lines = Get-ConversationDisplay (Get-Conversation $Session.Path) $width
+    $offset = 0
+
+    while ($true) {
+        $viewport = [Math]::Max(3, (Get-ConsoleSize Height 30) - 4)
+        $maxOffset = [Math]::Max(0, $lines.Count - $viewport)
+        if ($offset -gt $maxOffset) { $offset = $maxOffset }
+        if ($offset -lt 0) { $offset = 0 }
+
+        Clear-Host
+        $heading = '{0}  {1}' -f $Session.Id.Substring(0, 8), $Session.Cwd
+        if ($Session.Title) { $heading += '  — ' + $Session.Title }
+        Write-Truncated $heading $width @{ ForegroundColor = 'Cyan' }
+        Write-Host ('↑↓ scroll   pgup/pgdn page   home/end   esc back    {0}-{1} of {2}' -f
+                    ($offset + 1), [Math]::Min($offset + $viewport, $lines.Count), $lines.Count) -ForegroundColor DarkGray
+        Write-Host ''
+
+        for ($i = $offset; $i -lt [Math]::Min($offset + $viewport, $lines.Count); $i++) {
+            Write-Truncated $lines[$i].Text $width $lines[$i].Colour
+        }
+
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'UpArrow'   { $offset-- }
+            'DownArrow' { $offset++ }
+            'PageUp'    { $offset -= $viewport }
+            'PageDown'  { $offset += $viewport }
+            'Home'      { $offset = 0 }
+            'End'       { $offset = $maxOffset }
+            'Escape'    { return }
+            default {
+                switch ($key.KeyChar) {
+                    'k' { $offset-- }
+                    'j' { $offset++ }
+                    'q' { return }
+                    ' ' { $offset += $viewport }
+                }
+            }
+        }
+    }
+}
+
 # Arrow keys to move, space to toggle, enter to confirm. Everything starts selected, because the
 # common case is still "give me all of it" and deselecting two is quicker than selecting twenty.
 # Returns the chosen sessions, or $null when the user backs out.
@@ -359,7 +477,7 @@ function Invoke-SessionPicker([object[]]$Sessions) {
 
         Clear-Host
         Write-Host ("Select the sessions to reopen — {0} of {1}" -f ($chosen | Where-Object { $_ }).Count, $Sessions.Count) -ForegroundColor Cyan
-        Write-Host '↑↓ move   space toggle   a all/none   enter reopen   esc cancel' -ForegroundColor DarkGray
+        Write-Host '↑↓ move   space toggle   a all/none   v view conversation   enter reopen   esc cancel' -ForegroundColor DarkGray
         Write-Host ''
 
         for ($i = $offset; $i -lt $offset + $viewport; $i++) {
@@ -401,9 +519,91 @@ function Invoke-SessionPicker([object[]]$Sessions) {
                     }
                     'k' { if ($cursor -gt 0) { $cursor-- } }
                     'j' { if ($cursor -lt $Sessions.Count - 1) { $cursor++ } }
+                    'v' { Show-Conversation $Sessions[$cursor] }
                     'q' { Clear-Host; return $null }
                 }
             }
+        }
+    }
+}
+
+function Get-GroupingLabel([string]$Value) {
+    switch ($Value) {
+        'single'  { return 'everything in one window' }
+        'workdir' { return 'one window per working directory' }
+        'session' { return 'one window per session' }
+    }
+}
+
+function Get-OrderLabel([string]$Value) {
+    if ($Value -eq 'oldest') { return 'oldest prompt first — the most recent ends up active' }
+    return 'most recent prompt first'
+}
+
+# Asked rather than assumed: how the tabs are spread over windows is a matter of taste, and the
+# moment to decide it is when you can see how many sessions came back.
+function Invoke-OptionsPrompt([object[]]$Sessions, [string]$Grouping, [string]$Order) {
+    $groupings = @('single', 'workdir', 'session')
+    $orders = @('oldest', 'newest')
+
+    while ($true) {
+        $windows = switch ($Grouping) {
+            'single'  { 1 }
+            'workdir' { @($Sessions | Select-Object -ExpandProperty Cwd -Unique).Count }
+            'session' { $Sessions.Count }
+        }
+
+        Clear-Host
+        Write-Host ("About to reopen {0} session(s) in {1} window(s)." -f $Sessions.Count, $windows) -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host ('  g   grouping   ' + (Get-GroupingLabel $Grouping))
+        Write-Host ('  o   order      ' + (Get-OrderLabel $Order))
+        Write-Host ''
+        Write-Host '  enter reopen   esc cancel' -ForegroundColor DarkGray
+
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'Enter'  { Clear-Host; return @{ Grouping = $Grouping; Order = $Order } }
+            'Escape' { Clear-Host; return $null }
+            default {
+                switch ($key.KeyChar) {
+                    'g' { $Grouping = $groupings[(($groupings.IndexOf($Grouping)) + 1) % $groupings.Count] }
+                    'o' { $Order = $orders[(($orders.IndexOf($Order)) + 1) % $orders.Count] }
+                    'q' { Clear-Host; return $null }
+                }
+            }
+        }
+    }
+}
+
+# Sessions of the same working directory must be launched consecutively, or their tabs would be
+# interleaved with other windows' — so groups are ordered by their own most recent session, and
+# the chosen order applies both between groups and inside them.
+function Sort-ForLaunch([object[]]$Sessions, [string]$Grouping, [string]$Order) {
+    $descending = $Order -eq 'newest'
+    if ($Grouping -ne 'workdir') {
+        return @($Sessions | Sort-Object LastSeen -Descending:$descending)
+    }
+
+    $groups = $Sessions | Group-Object Cwd | ForEach-Object {
+        [pscustomobject]@{
+            Members = @($_.Group | Sort-Object LastSeen -Descending:$descending)
+            Latest  = ($_.Group | Measure-Object LastSeen -Maximum).Maximum
+        }
+    }
+    return @($groups | Sort-Object Latest -Descending:$descending | ForEach-Object { $_.Members })
+}
+
+function Get-TargetWindow($Session, [string]$Grouping) {
+    switch ($Grouping) {
+        'single'  { return $WindowName }
+        'session' { return $Session.Id }
+        'workdir' {
+            # Window names have to be stable and distinct: the leaf alone collides between
+            # unrelated repositories that happen to share a folder name.
+            $leaf = Split-Path $Session.Cwd -Leaf
+            $hash = [Math]::Abs($Session.Cwd.ToLowerInvariant().GetHashCode()) % 100000
+            return ('{0}-{1}' -f $leaf, $hash)
         }
     }
 }
@@ -423,7 +623,7 @@ function Format-ShellArgument([string]$Value) {
     return "'" + ($Value -replace "'", "''") + "'"
 }
 
-function Open-Session($Session, [string]$Shell, [bool]$UseWindowsTerminal) {
+function Open-Session($Session, [string]$Shell, [bool]$UseWindowsTerminal, [string]$Window) {
     $resume = "claude --resume $($Session.Id)"
     foreach ($arg in $ClaudeArgs) {
         $resume += ' ' + (Format-ShellArgument $arg)
@@ -431,7 +631,7 @@ function Open-Session($Session, [string]$Shell, [bool]$UseWindowsTerminal) {
     $title = '{0} {1}' -f (Split-Path $Session.Cwd -Leaf), $Session.Id.Substring(0, 8)
 
     if ($UseWindowsTerminal) {
-        wt.exe -w $WindowName new-tab --title $title -d $Session.Cwd $Shell -NoLogo -NoExit -Command $resume
+        wt.exe -w $Window new-tab --title $title -d $Session.Cwd $Shell -NoLogo -NoExit -Command $resume
         # Tabs fired back to back at `-w 0` can race and land in windows of their own.
         Start-Sleep -Milliseconds 600
         return
@@ -483,7 +683,7 @@ if ($Include.Count -gt 0) {
 
 Write-Host ("Sessions worked on since {0}: {1}" -f $From.ToString('yyyy-MM-dd HH:mm'), $worked.Count) -ForegroundColor Cyan
 if ($skipped.Count -gt 0) {
-    Write-Host ("Already open, left alone: {0}" -f ($skipped -join ', ')) -ForegroundColor DarkYellow
+    Write-Host ("Already open, left alone: {0}" -f (($skipped | Select-Object -Unique) -join ', ')) -ForegroundColor DarkYellow
 }
 if ($worked.Count -eq 0) { return }
 
@@ -499,6 +699,9 @@ if ($Pick -and -not $DryRun) {
     }
 }
 
+# Sorted before it is printed, so -DryRun shows the order the tabs would actually open in.
+$worked = Sort-ForLaunch $worked $Grouping $Order
+
 $listWidth = [Math]::Max(60, (Get-ConsoleSize Width 120) - 1)
 foreach ($s in $worked) {
     Write-Host ('  ' + (Format-SessionLine $s))
@@ -509,18 +712,31 @@ if ($ClaudeArgs.Count -gt 0) {
 }
 if ($DryRun) { return }
 
+if (-not $NoPrompt -and -not [Console]::IsInputRedirected) {
+    $answer = Invoke-OptionsPrompt $worked $Grouping $Order
+    if (-not $answer) {
+        Write-Host 'Cancelled, nothing opened.' -ForegroundColor DarkYellow
+        return
+    }
+    $Grouping = $answer.Grouping
+    $Order = $answer.Order
+    $worked = Sort-ForLaunch $worked $Grouping $Order   # the answers may have changed both
+}
+
 $shell = Get-TabShell
 $useWindowsTerminal = [bool](Get-Command wt.exe -ErrorAction SilentlyContinue)
-if ($useWindowsTerminal) {
-    Write-Host ("Opening {0} tabs in a single window (-w {1})..." -f $worked.Count, $WindowName) -ForegroundColor Cyan
-} else {
+if (-not $useWindowsTerminal) {
     Write-Host ("Windows Terminal not found; opening {0} separate console windows..." -f $worked.Count) -ForegroundColor Yellow
+} else {
+    $windowCount = @($worked | ForEach-Object { Get-TargetWindow $_ $Grouping } | Select-Object -Unique).Count
+    Write-Host ("Opening {0} tabs across {1} window(s) — {2}, {3}." -f
+                $worked.Count, $windowCount, (Get-GroupingLabel $Grouping), (Get-OrderLabel $Order)) -ForegroundColor Cyan
 }
 
 $savedEnv = Clear-InheritedClaudeEnv
 try {
     foreach ($s in $worked) {
-        Open-Session $s $shell $useWindowsTerminal
+        Open-Session $s $shell $useWindowsTerminal (Get-TargetWindow $s $Grouping)
     }
 } finally {
     Restore-InheritedClaudeEnv $savedEnv
