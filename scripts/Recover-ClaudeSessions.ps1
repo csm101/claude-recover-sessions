@@ -385,6 +385,68 @@ function Write-Truncated([string]$Text, [int]$Width, [hashtable]$Colour) {
     Write-Host $Text @Colour
 }
 
+# Prints a line built from differently-coloured pieces, truncating (with a trailing ellipsis)
+# at the first piece that would overflow the width instead of at a fixed character count —
+# so colour never gets cut off mid-escape-sequence and a later piece never renders past $Width.
+function Write-Segments([object[]]$Segments, [int]$Width) {
+    $used = 0
+    foreach ($segment in $Segments) {
+        $remaining = $Width - $used
+        if ($remaining -le 0) { break }
+        $text = $segment.Text
+        if ($text.Length -gt $remaining) {
+            $text = $text.Substring(0, [Math]::Max(0, $remaining - 1)) + '…'
+            $used = $Width
+        } else {
+            $used += $text.Length
+        }
+        $colour = $segment.Colour
+        Write-Host $text @colour -NoNewline
+    }
+    Write-Host ''
+}
+
+# The picker packs id/date/prompt-count/folder/title onto one row when they fit; when the title
+# would not (the common case for a real conversation summary), it drops to a second row of its
+# own instead of being truncated away — the two-row layout used by Write-SessionRow.
+function Get-SessionLayout($Session, [int]$Width) {
+    $prefixWidth = 6   # "> [x] "
+    $meta = '{0}  {1}  {2,3} prompts  ' -f $Session.Id.Substring(0, 8),
+                                            $Session.LastSeen.ToString('MM-dd HH:mm'),
+                                            $Session.Prompts
+    $oneLineWidth = $Width - $prefixWidth
+    $combined = if ($Session.Title) { '{0}{1}  — {2}' -f $meta, $Session.Cwd, $Session.Title } else { $meta + $Session.Cwd }
+    $twoRow = [bool]$Session.Title -and $combined.Length -gt $oneLineWidth
+
+    return @{ Meta = $meta; Cwd = $Session.Cwd; Title = $Session.Title; TwoRow = $twoRow; RowCount = $(if ($twoRow) { 2 } else { 1 }) }
+}
+
+function Write-SessionRow($Session, [bool]$IsCursor, [bool]$IsChosen, [int]$Width) {
+    $layout = Get-SessionLayout $Session $Width
+    $prefix = '{0} {1} ' -f $(if ($IsCursor) { '>' } else { ' ' }), $(if ($IsChosen) { '[x]' } else { '[ ]' })
+    $titleSuffix = if (-not $layout.TwoRow -and $layout.Title) { '  — ' + $layout.Title } else { '' }
+
+    if ($IsCursor -or -not $IsChosen) {
+        $uniform = if ($IsCursor) { @{ ForegroundColor = 'Black'; BackgroundColor = 'Gray' } } else { @{ ForegroundColor = 'DarkGray' } }
+        Write-Truncated ($prefix + $layout.Meta + $layout.Cwd + $titleSuffix) $Width $uniform
+        if ($layout.TwoRow) { Write-Truncated ('      — ' + $layout.Title) $Width $uniform }
+        return
+    }
+
+    # Chosen and not under the cursor: folder and title each get their own colour so the two
+    # things you actually scan for — where it was, what it was about — stand out from the rest.
+    $segments = @(
+        @{ Text = $prefix + $layout.Meta; Colour = @{} },
+        @{ Text = $layout.Cwd; Colour = @{ ForegroundColor = 'DarkCyan' } }
+    )
+    if ($titleSuffix) { $segments += @{ Text = $titleSuffix; Colour = @{ ForegroundColor = 'DarkYellow' } } }
+    Write-Segments $segments $Width
+
+    if ($layout.TwoRow) {
+        Write-Segments @(@{ Text = '      — ' + $layout.Title; Colour = @{ ForegroundColor = 'DarkYellow' } }) $Width
+    }
+}
+
 # An opening prompt is often a paragraph, and its first line rarely says what the session is
 # about. Wrapping it over a few lines is what makes the list recognisable.
 function Format-Wrapped([string]$Text, [int]$Width, [int]$MaxLines) {
@@ -481,6 +543,20 @@ function Clear-InputBuffer {
     while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) }
 }
 
+# Console.ReadKey blocks, so a plain read-key loop only notices a resized window on the next
+# keystroke. Polling window size between keystrokes and bailing out (without consuming a key)
+# the moment it changes lets the caller redraw immediately — `continue` back to the top of its
+# loop recomputes width/height from Get-ConsoleSize and repaints at the new size.
+function Read-KeyOrResize {
+    $startWidth = [Console]::WindowWidth
+    $startHeight = [Console]::WindowHeight
+    while (-not [Console]::KeyAvailable) {
+        if ([Console]::WindowWidth -ne $startWidth -or [Console]::WindowHeight -ne $startHeight) { return $null }
+        Start-Sleep -Milliseconds 100
+    }
+    return [Console]::ReadKey($true)
+}
+
 function Show-Conversation($Session) {
     $width = [Math]::Max(60, (Get-ConsoleSize Width 120) - 1)
     Clear-Host
@@ -516,7 +592,8 @@ function Show-Conversation($Session) {
             Write-Truncated $lines[$i].Text $width $lines[$i].Colour
         }
 
-        $key = [Console]::ReadKey($true)
+        $key = Read-KeyOrResize
+        if ($null -eq $key) { continue }
         switch ($key.Key) {
             'UpArrow'   { $offset-- }
             'DownArrow' { $offset++ }
@@ -574,8 +651,17 @@ function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.H
 
         $viewport = [Math]::Max(3, (Get-ConsoleSize Height 30) - 7 - $detailHeight)
         if ($viewport -gt $Sessions.Count) { $viewport = $Sessions.Count }
+
+        # Sessions can now render as one or two rows (title wraps to its own line when it does
+        # not fit next to the folder), so "how many sessions are visible" is not a fixed count
+        # any more — it depends on how many rows each one actually needs.
         if ($cursor -lt $offset) { $offset = $cursor }
-        if ($cursor -ge $offset + $viewport) { $offset = $cursor - $viewport + 1 }
+        while ($offset -lt $cursor) {
+            $rows = 0
+            for ($i = $offset; $i -le $cursor; $i++) { $rows += (Get-SessionLayout $Sessions[$i] $width).RowCount }
+            if ($rows -le $viewport) { break }
+            $offset++
+        }
 
         Clear-Host
         Write-Host ("Select the sessions to reopen — {0} of {1}" -f ($chosen | Where-Object { $_ }).Count, $Sessions.Count) -ForegroundColor Cyan
@@ -585,23 +671,24 @@ function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.H
         }
         Write-Host ''
 
-        for ($i = $offset; $i -lt $offset + $viewport; $i++) {
-            $line = '{0} {1} {2}' -f $(if ($i -eq $cursor) { '>' } else { ' ' }),
-                                     $(if ($chosen[$i]) { '[x]' } else { '[ ]' }),
-                                     (Format-SessionLine $Sessions[$i])
-            $colour = if ($i -eq $cursor) { @{ ForegroundColor = 'Black'; BackgroundColor = 'Gray' } }
-                      elseif ($chosen[$i]) { @{} }
-                      else { @{ ForegroundColor = 'DarkGray' } }
-            Write-Truncated $line $width $colour
+        $rowsUsed = 0
+        $lastShown = $offset - 1
+        for ($i = $offset; $i -lt $Sessions.Count; $i++) {
+            $rowCount = (Get-SessionLayout $Sessions[$i] $width).RowCount
+            if ($rowsUsed + $rowCount -gt $viewport -and $i -gt $offset) { break }
+            Write-SessionRow $Sessions[$i] ($i -eq $cursor) $chosen[$i] $width
+            $rowsUsed += $rowCount
+            $lastShown = $i
         }
 
-        if ($Sessions.Count -gt $viewport) {
-            Write-Host ("  … {0}-{1} of {2}" -f ($offset + 1), ($offset + $viewport), $Sessions.Count) -ForegroundColor DarkGray
+        if ($offset -gt 0 -or $lastShown -lt $Sessions.Count - 1) {
+            Write-Host ("  … {0}-{1} of {2}" -f ($offset + 1), ($lastShown + 1), $Sessions.Count) -ForegroundColor DarkGray
         }
         Write-Host ''
         Write-SessionSample $Sessions[$cursor] $width $SampleLines '  '
 
-        $key = [Console]::ReadKey($true)
+        $key = Read-KeyOrResize
+        if ($null -eq $key) { continue }
         switch ($key.Key) {
             'UpArrow'   { if ($cursor -gt 0) { $cursor-- } }
             'DownArrow' { if ($cursor -lt $Sessions.Count - 1) { $cursor++ } }

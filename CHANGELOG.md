@@ -7,6 +7,10 @@
   reappearing in a later run starts unticked again instead of asking a second time. Ticking one
   back on forgets it. Cancelling with `esc` does not count as a decision. Entries for sessions
   whose transcript no longer exists are pruned automatically on read.
+- The picker and the conversation reader now redraw on their own when the terminal window is
+  resized, instead of waiting for the next keystroke.
+- The picker's session list colours the working directory and the title differently, and drops
+  the title to its own row when it does not fit next to the folder instead of truncating it away.
 
 ## 3.0.0
 
