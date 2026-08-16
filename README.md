@@ -204,15 +204,18 @@ once, each free to run commands and edit files before you have looked at any of 
 
 ## How it works
 
-1. Read the transcripts under `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR`), skipping
-   `subagents/`. Lines are streamed and pre-filtered before parsing — transcripts get large.
+1. Read the transcripts under `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR`), skipping any
+   transcript under a `subagents` folder, at any depth — a workflow-spawned subagent's transcript
+   lands under `subagents/workflows/<wf-id>/`, not directly inside `subagents/`. Lines are
+   streamed and pre-filtered before parsing — transcripts get large.
 2. Keep sessions with at least one human message in the window.
 3. Resolve each session's working directory. `claude --resume <id>` resolves the id relative to
    the current directory, and a session continued elsewhere records more than one cwd, so the
    right one is the cwd whose encoded form matches the project directory holding the transcript.
 4. Drop sessions already open, the session the script was launched from, and any whose working
    directory is gone.
-5. Open the rest oldest-first, so the most recent lands as the active tab.
+5. Show the picker newest-first. Once you've chosen, the sessions actually open in the order set
+   by `-Order` (`oldest` by default), so the most recent still lands as the active tab.
 
 ### Running it from inside Claude Code
 

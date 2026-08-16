@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.2.0
+
+- The picker lists sessions newest-first instead of oldest-first. Launch order is unaffected —
+  it is still decided separately by `-Order` (`oldest` by default, so the most recent session
+  ends up the active tab).
+- Fixed a nested-subagent leak: a subagent spawned from a workflow keeps its transcript under
+  `subagents/workflows/<wf-id>/`, so its immediate parent folder is never literally named
+  `subagents` and it slipped past the old filter. The check now looks for `subagents` anywhere
+  in the path.
+- The picker recomputed every session's word-wrapped detail height on every arrow key, which
+  made long lists visibly slow to scroll. That scan now only reruns when the console is resized.
+- Redraws (picker, conversation reader, grouping/order screen) used to clear the screen and then
+  print each line as its own write, which flickered visibly on Windows Terminal. A frame is now
+  built in memory and flushed in a single write instead.
+
 ## 3.1.0
 
 - The picker remembers what you untick. Confirming a selection with sessions left unticked
