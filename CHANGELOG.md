@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The picker remembers what you untick. Confirming a selection with sessions left unticked
+  records them in `recover-sessions-deselected.json` (next to the transcripts), and any of them
+  reappearing in a later run starts unticked again instead of asking a second time. Ticking one
+  back on forgets it. Cancelling with `esc` does not count as a decision. Entries for sessions
+  whose transcript no longer exists are pruned automatically on read.
+
 ## 3.0.0
 
 - Choosing is now the default: running the script shows the session list instead of reopening

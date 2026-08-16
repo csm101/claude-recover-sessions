@@ -162,9 +162,20 @@ if (-not $PSBoundParameters.ContainsKey('Days') -and $ClaudeArgs.Count -gt 0 -an
 $From = (Get-Date).Date.AddDays(-$Days)
 $To   = Get-Date
 
+function Get-ClaudeConfigDir {
+    if ($env:CLAUDE_CONFIG_DIR) { return $env:CLAUDE_CONFIG_DIR }
+    return (Join-Path $HOME '.claude')
+}
+
 function Get-ClaudeProjectRoot {
-    $configDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME '.claude' }
-    return (Join-Path $configDir 'projects')
+    return (Join-Path (Get-ClaudeConfigDir) 'projects')
+}
+
+# Session ids the picker was told 'no' for, remembered across runs so the next recovery does not
+# ask again about the same session. Lives next to the transcripts rather than the script, since a
+# clone of the repo should not start out claiming to know what you have already declined.
+function Get-DeselectionStorePath {
+    return (Join-Path (Get-ClaudeConfigDir) 'recover-sessions-deselected.json')
 }
 
 # Claude Code names each project directory after its working directory, flattening the
@@ -298,6 +309,56 @@ function Get-AlreadyOpenSessionId {
         }
     }
     return $ids
+}
+
+# Ids read as strings, never resolved against anything here — a session gone from disk is
+# handled separately, by Get-PrunedDeselection, so a transient read error does not wipe memory.
+#
+# Every return below is `, $ids` rather than `$ids`: an empty HashSet is still IEnumerable, and
+# PowerShell unrolls a returned IEnumerable into the pipeline — zero elements in means the caller
+# captures $null instead of an empty set. Same trick Get-Conversation uses, same reason.
+function Get-DeselectedIds([string]$Path) {
+    $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    if (-not (Test-Path -LiteralPath $Path)) { return , $ids }
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        Write-Warning "Could not read $Path, starting with no remembered deselections: $($_.Exception.Message)"
+        return , $ids
+    }
+    foreach ($id in @($raw)) { if ($id) { $ids.Add([string]$id) | Out-Null } }
+    return , $ids
+}
+
+function Save-DeselectedIds([string]$Path, [System.Collections.Generic.HashSet[string]]$Ids) {
+    $dir = Split-Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $sorted = @($Ids | Sort-Object)
+    # The unary comma keeps ConvertTo-Json from unrolling a one-item (or empty) array into a bare
+    # scalar before it ever sees it — the same trick Get-Conversation uses for the same reason.
+    (, $sorted | ConvertTo-Json) | Set-Content -LiteralPath $Path -Encoding utf8
+}
+
+# A session deselected once and never seen again (its transcript deleted, or the whole project
+# directory gone) would otherwise sit in the store forever. Checked against every transcript on
+# disk, not just the current -Days window, since an old deselection must survive a narrower search.
+function Get-PrunedDeselection([System.Collections.Generic.HashSet[string]]$Ids, [string[]]$ExistingSessionIds) {
+    $existing = [System.Collections.Generic.HashSet[string]]::new([string[]]$ExistingSessionIds, [System.StringComparer]::OrdinalIgnoreCase)
+    $pruned = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($id in $Ids) { if ($existing.Contains($id)) { $pruned.Add($id) | Out-Null } }
+    return , $pruned
+}
+
+# What the picker returns is only the ones kept; what has to be remembered is the ones dropped.
+# Diffed against every session the picker showed, not just $Picked, so ticking a session back on
+# forgets its old deselection instead of leaving a stale entry the next run would still honour.
+function Get-UpdatedDeselection([object[]]$Shown, [object[]]$Picked, [System.Collections.Generic.HashSet[string]]$Current) {
+    $pickedIds = [System.Collections.Generic.HashSet[string]]::new([string[]]@($Picked | ForEach-Object Id), [System.StringComparer]::OrdinalIgnoreCase)
+    $updated = [System.Collections.Generic.HashSet[string]]::new($Current, [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($s in $Shown) {
+        if ($pickedIds.Contains($s.Id)) { $updated.Remove($s.Id) | Out-Null } else { $updated.Add($s.Id) | Out-Null }
+    }
+    return , $updated
 }
 
 # [Console]::WindowWidth throws an invalid-handle error when the output is redirected, which is
@@ -489,12 +550,14 @@ function Confirm-Cancel {
     return $false
 }
 
-# Arrow keys to move, space to toggle, enter to confirm. Everything starts selected, because the
-# common case is still "give me all of it" and deselecting two is quicker than selecting twenty.
-# Returns the chosen sessions, or $null when the user backs out.
-function Invoke-SessionPicker([object[]]$Sessions) {
+# Arrow keys to move, space to toggle, enter to confirm. Everything starts selected except
+# sessions declined in an earlier run, because the common case is still "give me all of it" and
+# deselecting two is quicker than selecting twenty — the exception is whatever you already said
+# no to. Returns the chosen sessions, or $null when the user backs out.
+function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.HashSet[string]]$DeselectedIds) {
     $chosen = [bool[]]::new($Sessions.Count)
-    for ($i = 0; $i -lt $chosen.Count; $i++) { $chosen[$i] = $true }
+    for ($i = 0; $i -lt $chosen.Count; $i++) { $chosen[$i] = -not $DeselectedIds.Contains($Sessions[$i].Id) }
+    $remembered = ($chosen | Where-Object { -not $_ }).Count
     $cursor = 0
     $offset = 0
 
@@ -517,6 +580,9 @@ function Invoke-SessionPicker([object[]]$Sessions) {
         Clear-Host
         Write-Host ("Select the sessions to reopen — {0} of {1}" -f ($chosen | Where-Object { $_ }).Count, $Sessions.Count) -ForegroundColor Cyan
         Write-Host '↑↓ move   space toggle   a all/none   v view conversation   enter reopen   esc cancel' -ForegroundColor DarkGray
+        if ($remembered -gt 0) {
+            Write-Host ("{0} pre-deselected — declined in an earlier run" -f $remembered) -ForegroundColor DarkGray
+        }
         Write-Host ''
 
         for ($i = $offset; $i -lt $offset + $viewport; $i++) {
@@ -747,8 +813,17 @@ if (-not (Test-Path -LiteralPath $projectRoot)) {
 $excluded = @($Exclude) + @($env:CLAUDE_CODE_SESSION_ID) | Where-Object { $_ }
 $alreadyOpen = Get-AlreadyOpenSessionId
 
-$candidates = Get-ChildItem $projectRoot -Recurse -Filter *.jsonl -File |
-    Where-Object { $_.Directory.Name -ne 'subagents' -and $_.LastWriteTime -gt $From }
+$allTranscripts = Get-ChildItem $projectRoot -Recurse -Filter *.jsonl -File |
+    Where-Object { $_.Directory.Name -ne 'subagents' }
+$candidates = $allTranscripts | Where-Object { $_.LastWriteTime -gt $From }
+
+# Loaded against every transcript on disk, not just $candidates, so a session declined outside
+# today's -Days window is not mistaken for one that no longer exists and pruned from memory.
+$deselectedPath = Get-DeselectionStorePath
+$deselected = Get-DeselectedIds $deselectedPath
+$prunedDeselected = Get-PrunedDeselection $deselected @($allTranscripts.BaseName)
+if ($prunedDeselected.Count -ne $deselected.Count) { Save-DeselectedIds $deselectedPath $prunedDeselected }
+$deselected = $prunedDeselected
 
 $skipped = [System.Collections.Generic.List[string]]::new()
 $worked = foreach ($f in $candidates) {
@@ -792,7 +867,14 @@ if (-not $All -and -not $DryRun -and $Include.Count -eq 0) {
         Start-InteractiveConsole $PSBoundParameters
         return
     }
-    $worked = Invoke-SessionPicker $worked
+    $shown = $worked
+    $picked = Invoke-SessionPicker $worked $deselected
+    # $null means cancelled — nothing was decided, so memory is left alone. An empty but non-null
+    # result means every session was deliberately unticked, which is still a decision to remember.
+    if ($null -ne $picked) {
+        Save-DeselectedIds $deselectedPath (Get-UpdatedDeselection $shown $picked $deselected)
+    }
+    $worked = $picked
     if (-not $worked -or $worked.Count -eq 0) {
         Write-Host 'Nothing selected.' -ForegroundColor DarkYellow
         return

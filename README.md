@@ -99,6 +99,14 @@ recovery reopens somebody's whole afternoon, and that is worth a look before it 
 
 `-All` skips the list. So does `-Include`, which is a choice already made.
 
+Sessions you untick and confirm are remembered: the next time one of them shows up in the list,
+it starts unticked again, so a session you decided against once does not have to be declined a
+second time. Ticking one back on forgets that it was ever declined. The memory lives in
+`recover-sessions-deselected.json` next to the transcripts (`~/.claude`, or `$CLAUDE_CONFIG_DIR`);
+deleting it resets every session back to ticked. Cancelling the picker with `esc` does not update
+it — only a confirmed selection counts as a decision. Entries for sessions whose transcript no
+longer exists are dropped automatically each time the list is read.
+
 Two things do the identifying. The name after the dash is the title Claude Code gave the
 conversation — sessions started before that feature simply have none. Under the list is the
 session's opening prompt, wrapped over up to ten lines rather than cut at the first: the first
