@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.1.0
 
 - The picker remembers what you untick. Confirming a selection with sessions left unticked
   records them in `recover-sessions-deselected.json` (next to the transcripts), and any of them
