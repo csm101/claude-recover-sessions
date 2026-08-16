@@ -371,6 +371,62 @@ function Get-ConsoleSize([string]$Dimension, [int]$Fallback) {
     return $Fallback
 }
 
+# Clear-Host maps to [Console]::Clear(), which under Windows Terminal's conpty goes through a
+# full screen-buffer round trip and is noticeably slow when called on every single keystroke of
+# a redraw loop. A raw VT clear (home cursor, wipe from there to end of screen) is handled
+# terminal-side and is effectively instant — but only safe to assume where WT_SESSION says the
+# terminal actually understands VT sequences. Anywhere else (plain conhost, ISE) falls back.
+$script:UseFastClear = [bool]$env:WT_SESSION
+
+function Clear-ScreenFast {
+    if ($script:UseFastClear) {
+        [Console]::Out.Write("$([char]27)[H$([char]27)[0J")
+    } else {
+        Clear-Host
+    }
+}
+
+# Ansi 3/4-bit SGR codes for the ConsoleColor names this script's -ForegroundColor /
+# -BackgroundColor hashtables actually use — just enough to translate a colour once a redraw is
+# being buffered instead of written straight to the console.
+$script:AnsiFgCodes = @{
+    Black = 30; DarkRed = 31; DarkGreen = 32; DarkYellow = 33; DarkBlue = 34; DarkMagenta = 35
+    DarkCyan = 36; Gray = 37; DarkGray = 90; Red = 91; Green = 92; Yellow = 93; Blue = 94
+    Magenta = 95; Cyan = 96; White = 97
+}
+
+function ConvertTo-AnsiText([string]$Text, [hashtable]$Colour) {
+    if (-not $Text -or -not $Colour -or $Colour.Count -eq 0) { return $Text }
+    $codes = [System.Collections.Generic.List[int]]::new()
+    if ($Colour.ForegroundColor) { $codes.Add($script:AnsiFgCodes[[string]$Colour.ForegroundColor]) }
+    if ($Colour.BackgroundColor) { $codes.Add($script:AnsiFgCodes[[string]$Colour.BackgroundColor] + 10) }
+    if ($codes.Count -eq 0) { return $Text }
+    return "$([char]27)[$($codes -join ';')m$Text$([char]27)[0m"
+}
+
+# A redraw loop that clears then paints through many separate Write-Host calls flickers: the
+# terminal repaints as each call lands, so the eye catches the screen half-drawn between them.
+# While a frame is open, Write-Truncated/Write-Segments append to $script:FrameBuffer instead of
+# writing; End-Frame flushes the clear-plus-content as one Console write, which lands as a single
+# repaint. Only meaningful where $script:UseFastClear also holds — the plain-Clear-Host fallback
+# has no per-call VT clear to race against, so it keeps writing straight through as before.
+$script:FrameBuffer = $null
+
+function Start-Frame {
+    if (-not $script:UseFastClear) {
+        Clear-Host
+        return
+    }
+    $script:FrameBuffer = [System.Text.StringBuilder]::new()
+    $script:FrameBuffer.Append("$([char]27)[H$([char]27)[0J") | Out-Null
+}
+
+function End-Frame {
+    if (-not $script:FrameBuffer) { return }
+    [Console]::Out.Write($script:FrameBuffer.ToString())
+    $script:FrameBuffer = $null
+}
+
 function Format-SessionLine($Session) {
     $line = '{0}  {1}  {2,3} prompts  {3}' -f $Session.Id.Substring(0, 8),
                                               $Session.LastSeen.ToString('MM-dd HH:mm'),
@@ -382,6 +438,10 @@ function Format-SessionLine($Session) {
 
 function Write-Truncated([string]$Text, [int]$Width, [hashtable]$Colour) {
     if ($Text.Length -gt $Width) { $Text = $Text.Substring(0, [Math]::Max(0, $Width - 1)) + '…' }
+    if ($script:FrameBuffer) {
+        $script:FrameBuffer.Append((ConvertTo-AnsiText $Text $Colour)).Append("`n") | Out-Null
+        return
+    }
     Write-Host $Text @Colour
 }
 
@@ -401,9 +461,13 @@ function Write-Segments([object[]]$Segments, [int]$Width) {
             $used += $text.Length
         }
         $colour = $segment.Colour
-        Write-Host $text @colour -NoNewline
+        if ($script:FrameBuffer) {
+            $script:FrameBuffer.Append((ConvertTo-AnsiText $text $colour)) | Out-Null
+        } else {
+            Write-Host $text @colour -NoNewline
+        }
     }
-    Write-Host ''
+    if ($script:FrameBuffer) { $script:FrameBuffer.Append("`n") | Out-Null } else { Write-Host '' }
 }
 
 # The picker packs id/date/prompt-count/folder/title onto one row when they fit; when the title
@@ -481,7 +545,7 @@ function Write-SessionSample($Session, [int]$Width, [int]$MaxLines, [string]$Ind
     $wrapped = @(Format-Wrapped $Session.Sample ($Width - $Indent.Length - 2) $MaxLines)
     for ($i = 0; $i -lt $wrapped.Count; $i++) {
         $prefix = if ($i -eq 0) { '> ' } else { '  ' }
-        Write-Host ($Indent + $prefix + $wrapped[$i]) -ForegroundColor DarkGray
+        Write-Truncated ($Indent + $prefix + $wrapped[$i]) $Width @{ ForegroundColor = 'DarkGray' }
     }
 }
 
@@ -559,8 +623,9 @@ function Read-KeyOrResize {
 
 function Show-Conversation($Session) {
     $width = [Math]::Max(60, (Get-ConsoleSize Width 120) - 1)
-    Clear-Host
-    Write-Host 'Reading the conversation…' -ForegroundColor DarkGray
+    Start-Frame
+    Write-Truncated 'Reading the conversation…' $width @{ ForegroundColor = 'DarkGray' }
+    End-Frame
 
     # A transcript this large is worth guarding: one malformed entry must not take the picker
     # down with it, losing a selection the user has been building.
@@ -580,17 +645,18 @@ function Show-Conversation($Session) {
         if ($offset -gt $maxOffset) { $offset = $maxOffset }
         if ($offset -lt 0) { $offset = 0 }
 
-        Clear-Host
+        Start-Frame
         $heading = '{0}  {1}' -f $Session.Id.Substring(0, 8), $Session.Cwd
         if ($Session.Title) { $heading += '  — ' + $Session.Title }
         Write-Truncated $heading $width @{ ForegroundColor = 'Cyan' }
-        Write-Host ('↑↓ scroll   pgup/pgdn page   home/end   esc back    {0}-{1} of {2}' -f
-                    ($offset + 1), [Math]::Min($offset + $viewport, $lines.Count), $lines.Count) -ForegroundColor DarkGray
-        Write-Host ''
+        Write-Truncated ('↑↓ scroll   pgup/pgdn page   home/end   esc back    {0}-{1} of {2}' -f
+                    ($offset + 1), [Math]::Min($offset + $viewport, $lines.Count), $lines.Count) $width @{ ForegroundColor = 'DarkGray' }
+        Write-Truncated '' $width @{}
 
         for ($i = $offset; $i -lt [Math]::Min($offset + $viewport, $lines.Count); $i++) {
             Write-Truncated $lines[$i].Text $width $lines[$i].Colour
         }
+        End-Frame
 
         $key = Read-KeyOrResize
         if ($null -eq $key) { continue }
@@ -616,12 +682,12 @@ function Show-Conversation($Session) {
 
 # Leaving the picker throws away a selection that took reading to build, so it is worth one key.
 function Confirm-Cancel {
-    Clear-Host
+    Clear-ScreenFast
     Write-Host 'Cancel and open nothing?' -ForegroundColor Yellow
     Write-Host 'y to cancel — any other key goes back to the list' -ForegroundColor DarkGray
     $answer = [Console]::ReadKey($true)
     if ($answer.KeyChar -eq 'y' -or $answer.KeyChar -eq 'Y') {
-        Clear-Host
+        Clear-ScreenFast
         return $true
     }
     return $false
@@ -638,15 +704,23 @@ function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.H
     $cursor = 0
     $offset = 0
 
+    # Reserve the detail area for the longest prompt in the set rather than for the one under the
+    # cursor, so the list does not jump up and down as you move through it. This scan is O(Sessions)
+    # and only depends on $width, so it is cached across redraws — recomputing it on every arrow key
+    # (as opposed to only on a resize) was the main cost behind a slow-feeling picker on long lists.
+    $detailHeightWidth = -1
+    $detailHeight = 1
+
     while ($true) {
         $width = [Math]::Max(60, (Get-ConsoleSize Width 120) - 1)
 
-        # Reserve the detail area for the longest prompt in the set rather than for the one under
-        # the cursor, so the list does not jump up and down as you move through it.
-        $detailHeight = 1
-        foreach ($s in $Sessions) {
-            $needed = @(Format-Wrapped $s.Sample ($width - 4) $SampleLines).Count
-            if ($needed -gt $detailHeight) { $detailHeight = $needed }
+        if ($width -ne $detailHeightWidth) {
+            $detailHeightWidth = $width
+            $detailHeight = 1
+            foreach ($s in $Sessions) {
+                $needed = @(Format-Wrapped $s.Sample ($width - 4) $SampleLines).Count
+                if ($needed -gt $detailHeight) { $detailHeight = $needed }
+            }
         }
 
         $viewport = [Math]::Max(3, (Get-ConsoleSize Height 30) - 7 - $detailHeight)
@@ -663,13 +737,13 @@ function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.H
             $offset++
         }
 
-        Clear-Host
-        Write-Host ("Select the sessions to reopen — {0} of {1}" -f ($chosen | Where-Object { $_ }).Count, $Sessions.Count) -ForegroundColor Cyan
-        Write-Host '↑↓ move   space toggle   a all/none   v view conversation   enter reopen   esc cancel' -ForegroundColor DarkGray
+        Start-Frame
+        Write-Truncated ("Select the sessions to reopen — {0} of {1}" -f ($chosen | Where-Object { $_ }).Count, $Sessions.Count) $width @{ ForegroundColor = 'Cyan' }
+        Write-Truncated '↑↓ move   space toggle   a all/none   v view conversation   enter reopen   esc cancel' $width @{ ForegroundColor = 'DarkGray' }
         if ($remembered -gt 0) {
-            Write-Host ("{0} pre-deselected — declined in an earlier run" -f $remembered) -ForegroundColor DarkGray
+            Write-Truncated ("{0} pre-deselected — declined in an earlier run" -f $remembered) $width @{ ForegroundColor = 'DarkGray' }
         }
-        Write-Host ''
+        Write-Truncated '' $width @{}
 
         $rowsUsed = 0
         $lastShown = $offset - 1
@@ -682,10 +756,11 @@ function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.H
         }
 
         if ($offset -gt 0 -or $lastShown -lt $Sessions.Count - 1) {
-            Write-Host ("  … {0}-{1} of {2}" -f ($offset + 1), ($lastShown + 1), $Sessions.Count) -ForegroundColor DarkGray
+            Write-Truncated ("  … {0}-{1} of {2}" -f ($offset + 1), ($lastShown + 1), $Sessions.Count) $width @{ ForegroundColor = 'DarkGray' }
         }
-        Write-Host ''
+        Write-Truncated '' $width @{}
         Write-SessionSample $Sessions[$cursor] $width $SampleLines '  '
+        End-Frame
 
         $key = Read-KeyOrResize
         if ($null -eq $key) { continue }
@@ -698,7 +773,7 @@ function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.H
             'PageDown'  { $cursor = [Math]::Min($Sessions.Count - 1, $cursor + $viewport) }
             'Spacebar'  { $chosen[$cursor] = -not $chosen[$cursor] }
             'Enter'     {
-                Clear-Host
+                Clear-ScreenFast
                 $picked = @(for ($i = 0; $i -lt $Sessions.Count; $i++) { if ($chosen[$i]) { $Sessions[$i] } })
                 return $picked
             }
@@ -738,6 +813,7 @@ function Invoke-OptionsPrompt([object[]]$Sessions, [string]$Grouping, [string]$O
     $groupings = @('single', 'workdir', 'session')
     $orders = @('oldest', 'newest')
 
+    $width = [Math]::Max(60, (Get-ConsoleSize Width 120) - 1)
     while ($true) {
         $windows = switch ($Grouping) {
             'single'  { 1 }
@@ -745,23 +821,24 @@ function Invoke-OptionsPrompt([object[]]$Sessions, [string]$Grouping, [string]$O
             'session' { $Sessions.Count }
         }
 
-        Clear-Host
-        Write-Host ("About to reopen {0} session(s) in {1} window(s)." -f $Sessions.Count, $windows) -ForegroundColor Cyan
-        Write-Host ''
-        Write-Host ('  g   grouping   ' + (Get-GroupingLabel $Grouping))
-        Write-Host ('  o   order      ' + (Get-OrderLabel $Order))
-        Write-Host ''
-        Write-Host '  enter reopen   esc cancel' -ForegroundColor DarkGray
+        Start-Frame
+        Write-Truncated ("About to reopen {0} session(s) in {1} window(s)." -f $Sessions.Count, $windows) $width @{ ForegroundColor = 'Cyan' }
+        Write-Truncated '' $width @{}
+        Write-Truncated ('  g   grouping   ' + (Get-GroupingLabel $Grouping)) $width @{}
+        Write-Truncated ('  o   order      ' + (Get-OrderLabel $Order)) $width @{}
+        Write-Truncated '' $width @{}
+        Write-Truncated '  enter reopen   esc cancel' $width @{ ForegroundColor = 'DarkGray' }
+        End-Frame
 
         $key = [Console]::ReadKey($true)
         switch ($key.Key) {
-            'Enter'  { Clear-Host; return @{ Grouping = $Grouping; Order = $Order } }
-            'Escape' { Clear-Host; return $null }
+            'Enter'  { Clear-ScreenFast; return @{ Grouping = $Grouping; Order = $Order } }
+            'Escape' { Clear-ScreenFast; return $null }
             default {
                 switch ($key.KeyChar) {
                     'g' { $Grouping = $groupings[(($groupings.IndexOf($Grouping)) + 1) % $groupings.Count] }
                     'o' { $Order = $orders[(($orders.IndexOf($Order)) + 1) % $orders.Count] }
-                    'q' { Clear-Host; return $null }
+                    'q' { Clear-ScreenFast; return $null }
                 }
             }
         }
@@ -900,8 +977,12 @@ if (-not (Test-Path -LiteralPath $projectRoot)) {
 $excluded = @($Exclude) + @($env:CLAUDE_CODE_SESSION_ID) | Where-Object { $_ }
 $alreadyOpen = Get-AlreadyOpenSessionId
 
+# A subagent's own transcript sits under a 'subagents' folder, sometimes several levels deep
+# (spawned from a workflow, it lands under subagents/workflows/<wf-id>/) — so the immediate
+# parent's name is not always 'subagents'. Checking the whole path for that segment, at any
+# depth, catches those too instead of only the direct case.
 $allTranscripts = Get-ChildItem $projectRoot -Recurse -Filter *.jsonl -File |
-    Where-Object { $_.Directory.Name -ne 'subagents' }
+    Where-Object { $_.FullName -notmatch '[\\/]subagents[\\/]' }
 $candidates = $allTranscripts | Where-Object { $_.LastWriteTime -gt $From }
 
 # Loaded against every transcript on disk, not just $candidates, so a session declined outside
@@ -934,8 +1015,9 @@ $worked = @($worked | Group-Object Id | ForEach-Object {
     $_.Group | Sort-Object LastSeen -Descending | Select-Object -First 1
 })
 
-# Oldest first, so the most recent sessions end up as the rightmost — and active — tabs.
-$worked = @($worked | Sort-Object LastSeen)
+# Most recent first: that's what the picker shows top-of-list. Launch order is unaffected — it's
+# decided separately by Sort-ForLaunch/-Order once the picker (or -All/-Include) settles $worked.
+$worked = @($worked | Sort-Object LastSeen -Descending)
 
 if ($Include.Count -gt 0) {
     $worked = @($worked | Where-Object { $id = $_.Id; $Include | Where-Object { $id.StartsWith($_) } })
