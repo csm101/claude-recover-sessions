@@ -107,8 +107,9 @@ deleting it resets every session back to ticked. Cancelling the picker with `esc
 it — only a confirmed selection counts as a decision. Entries for sessions whose transcript no
 longer exists are dropped automatically each time the list is read.
 
-Two things do the identifying. The name after the dash is the title Claude Code gave the
-conversation — sessions started before that feature simply have none. Under the list is the
+Two things do the identifying. The name after the dash is the session's title: the one you set
+with `/rename` if you set one, otherwise the title Claude Code gave the conversation itself —
+sessions started before that feature simply have none. Under the list is the
 session's opening prompt, wrapped over up to ten lines rather than cut at the first: the first
 line of a prompt is usually a preamble, and what tells you which session this is tends to come
 after it. `-SampleLines` changes the limit.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.2.1
+
+- The picker labelled every session with the title Claude Code generates for it, ignoring the one
+  set with `/rename`. A custom title now wins whenever the transcript carries one. Recency could
+  not decide this: Claude Code keeps refreshing its own generated title after a rename, so the
+  newer of the two entries is always the one you did not choose.
+
 ## 3.2.0
 
 - The picker lists sessions newest-first instead of oldest-first. Launch order is unaffected —
