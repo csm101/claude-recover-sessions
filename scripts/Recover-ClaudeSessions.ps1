@@ -225,7 +225,8 @@ function Get-WorkedSession([System.IO.FileInfo]$Jsonl) {
     $cwds = [System.Collections.Generic.List[string]]::new()
     $times = [System.Collections.Generic.List[datetime]]::new()
     $firstPrompt = $null
-    $title = $null
+    $aiTitle = $null
+    $customTitle = $null
 
     # Transcripts reach hundreds of megabytes, so lines are streamed and only the ones that can
     # possibly be user turns are handed to the JSON parser.
@@ -237,7 +238,13 @@ function Get-WorkedSession([System.IO.FileInfo]$Jsonl) {
             # Claude Code names the conversation as it goes and rewrites the entry each time, so
             # the last one wins. Older sessions predate the feature and simply have none.
             if ($line -match '"aiTitle":"((?:[^"\\]|\\.)*)"') {
-                $title = Expand-JsonString $Matches[1]
+                $aiTitle = Expand-JsonString $Matches[1]
+            }
+            # /rename writes its own entry, and Claude Code keeps refreshing the ai-title
+            # afterwards, so a renamed session cannot be resolved by recency: a custom title wins
+            # outright whenever the transcript carries one.
+            if ($line -match '"customTitle":"((?:[^"\\]|\\.)*)"') {
+                $customTitle = Expand-JsonString $Matches[1]
             }
             continue
         }
@@ -260,7 +267,7 @@ function Get-WorkedSession([System.IO.FileInfo]$Jsonl) {
         Id        = $Jsonl.BaseName
         Path      = $Jsonl.FullName
         Cwd       = Resolve-SessionCwd $Jsonl $cwds
-        Title     = $title
+        Title     = if ($customTitle) { $customTitle } else { $aiTitle }
         Prompts   = $times.Count
         FirstSeen = ($times | Measure-Object -Minimum).Minimum
         LastSeen  = ($times | Measure-Object -Maximum).Maximum
