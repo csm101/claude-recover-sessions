@@ -49,6 +49,11 @@ time and the next recovery hands you back everything you recovered *last* time, 
 handful of sessions you really worked in. Tool results, injected reminders and hook output are
 skipped for the same reason: only human turns are evidence.
 
+A request typed as the arguments of a command is a human turn too. `/plan <request>`, or a custom
+command or skill given arguments, counts as a prompt, and it is what the list shows when it opened
+the session. Built-in housekeeping such as `/plugin enable …` or `/model …` does not count: it
+configures Claude Code rather than asking for work.
+
 ## Requirements
 
 - Windows, PowerShell 5.1 or 7+
@@ -233,13 +238,14 @@ once, each free to run commands and edit files before you have looked at any of 
    transcript under a `subagents` folder, at any depth — a workflow-spawned subagent's transcript
    lands under `subagents/workflows/<wf-id>/`, not directly inside `subagents/`. Lines are
    streamed and pre-filtered before parsing — transcripts get large.
-2. Keep sessions with at least one human message in the window.
+2. Keep sessions with at least one human message in the window, and mark as closed those whose
+   last human turn, over the whole transcript, is `/done`.
 3. Resolve each session's working directory. `claude --resume <id>` resolves the id relative to
    the current directory, and a session continued elsewhere records more than one cwd, so the
    right one is the cwd whose encoded form matches the project directory holding the transcript.
 4. Drop sessions already open, the session the script was launched from, and any whose working
    directory is gone.
-5. Show the picker newest-first. Once you've chosen, the sessions actually open in the order set
+5. Show the picker newest-first, with closed sessions unticked. Once you've chosen, the sessions actually open in the order set
    by `-Order` (`oldest` by default), so the most recent still lands as the active tab.
 
 ### Running it from inside Claude Code
