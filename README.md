@@ -80,6 +80,17 @@ function recover-sessions {
 Then `recover-sessions 2` from any directory. `@args` matters: it forwards everything,
 including the bare day count and the flags meant for `claude`.
 
+Optionally, install the `/done` command as well (see
+[Closing a session with `/done`](#closing-a-session-with-done)):
+
+```powershell
+.\install.ps1
+```
+
+It copies `commands/done.md` into `~/.claude/commands` (or `$CLAUDE_CONFIG_DIR/commands`). Run it
+once per machine, and again after pulling a newer version. An existing `done.md` that differs is
+left alone unless you pass `-Force`, and `-Uninstall` removes it again.
+
 ## Use
 
 ```powershell
@@ -113,6 +124,19 @@ sessions started before that feature simply have none. Under the list is the
 session's opening prompt, wrapped over up to ten lines rather than cut at the first: the first
 line of a prompt is usually a preamble, and what tells you which session this is tends to come
 after it. `-SampleLines` changes the limit.
+
+### Closing a session with `/done`
+
+Some conversations are finished. Nothing is left to do in them, but they still fall inside the
+time window. To keep the next recovery from offering one of them, type `/done` in it before you
+close it. Install the command first with `install.ps1`.
+
+A session whose last thing you typed is `/done` shows up in the picker unticked and marked
+`closed`. You can still tick it if you need it after all. `-All` and `-DryRun` leave it out and
+name it on a `Closed with /done, left alone:` line, and naming it with `-Include` reopens it anyway.
+Nothing is stored apart from the transcript itself. If you resume the session later and type
+another prompt, `/done` is no longer the last thing you typed, and the session is recoverable
+again.
 
 If you would rather not be asked at all, list first and reopen a subset by id:
 

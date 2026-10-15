@@ -15,6 +15,10 @@
     `claude --resume` rewrites the transcript without you typing anything, so an mtime-based
     filter happily "recovers" sessions you never actually worked in.
 
+    A session whose last human turn is the /done command (commands/done.md, installed by
+    install.ps1) counts as concluded: the picker shows it unticked and marked "closed", and -All
+    leaves it out. Typing a new prompt in it afterwards makes it recoverable again.
+
 .PARAMETER Days
     How far back to look, in calendar days. 1 means "since yesterday at midnight", so it covers
     both yesterday and today — the usual shape of an overnight crash. 0 limits the search to
@@ -142,6 +146,7 @@ function Show-Usage {
         "  $me 7 --model opus                       last week, each session on a chosen model",
         '',
         'Sessions already open in another tab are skipped, so running it twice is safe.',
+        'Sessions ended with /done (see install.ps1) start unticked, marked closed; -All skips them.',
         ''
     )
     foreach ($line in $lines) { Write-Host $line }
@@ -205,6 +210,40 @@ function Test-UserAuthored([string]$Text) {
     return $true
 }
 
+# /done is a prompt command, so its invocation is recorded as a user turn whose text is the
+# <command-name> tag (preceded by <command-message> in older Claude Code versions). Anchored to
+# the start of the text: a prompt that merely quotes the tag is not a closing.
+function Test-ClosingCommand([string]$Text) {
+    return $Text -match '^\s*(<command-message>[^<]*</command-message>\s*)?<command-name>/done</command-name>'
+}
+
+# Built-in commands whose arguments configure Claude Code or the session rather than ask for
+# work. `/plugin enable x` is recorded exactly like `/plan <request>`, so nothing in the
+# transcript tells them apart — only the name does. Commands not listed here, custom ones and
+# skills included, count: what follows their name is a request.
+$script:HousekeepingCommands = @(
+    'add-dir', 'agents', 'clear', 'color', 'compact', 'config', 'context', 'cost', 'doctor',
+    'effort', 'export', 'fast', 'help', 'hooks', 'ide', 'keybindings', 'login', 'logout', 'mcp',
+    'memory', 'model', 'output-style', 'permissions', 'plugin', 'reload-plugins', 'remote-control',
+    'rename', 'resume', 'status', 'statusline', 'terminal-setup', 'theme', 'usage', 'vim'
+)
+
+# What the person typed in a user turn, or $null when the turn holds nothing of theirs. A prompt
+# command given arguments (`/plan <request>`) is recorded wrapped in <command-name>/<command-args>
+# tags, which Test-UserAuthored would throw away whole — and a session started that way may hold
+# no other prompt at all. The arguments are the request, so they count; a bare command does not.
+function Get-TypedText([string]$Text) {
+    if ($Text -notmatch '^\s*<command-') {
+        if (Test-UserAuthored $Text) { return $Text }
+        return $null
+    }
+    if ($Text -notmatch '<command-name>/([^<]+)</command-name>') { return $null }
+    if ($script:HousekeepingCommands -contains $Matches[1]) { return $null }
+    $name = '/' + $Matches[1]
+    if ($Text -notmatch '<command-args>([\s\S]*?)</command-args>' -or -not $Matches[1].Trim()) { return $null }
+    return '{0} {1}' -f $name, $Matches[1].Trim()
+}
+
 # `claude --resume <id>` looks the session up relative to the current directory, so the tab has
 # to start in the cwd whose encoded form matches the project directory holding the transcript.
 # That is not always the first cwd recorded in the file: a session continued elsewhere keeps its
@@ -227,6 +266,10 @@ function Get-WorkedSession([System.IO.FileInfo]$Jsonl) {
     $firstPrompt = $null
     $aiTitle = $null
     $customTitle = $null
+    # Tracked over the whole transcript, not just the -Days window: what decides whether the
+    # session is closed is whether /done came after the last thing typed, whenever that was.
+    $lastPrompt = [datetime]::MinValue
+    $closedAt = $null
 
     # Transcripts reach hundreds of megabytes, so lines are streamed and only the ones that can
     # possibly be user turns are handed to the JSON parser.
@@ -253,10 +296,16 @@ function Get-WorkedSession([System.IO.FileInfo]$Jsonl) {
         if (-not (Test-HumanPrompt $entry)) { continue }
 
         $when = ([datetime]$entry.timestamp).ToLocalTime()
-        if ($when -lt $From -or $when -gt $To) { continue }
-
         $text = Get-PromptText $entry
-        if (-not (Test-UserAuthored $text)) { continue }
+        if (Test-ClosingCommand $text) {
+            if (-not $closedAt -or $when -gt $closedAt) { $closedAt = $when }
+            continue
+        }
+        $text = Get-TypedText $text
+        if (-not $text) { continue }
+        if ($when -gt $lastPrompt) { $lastPrompt = $when }
+
+        if ($when -lt $From -or $when -gt $To) { continue }
 
         $times.Add($when)
         if (-not $firstPrompt) { $firstPrompt = ($text -replace '\s+', ' ').Trim() }
@@ -272,6 +321,7 @@ function Get-WorkedSession([System.IO.FileInfo]$Jsonl) {
         FirstSeen = ($times | Measure-Object -Minimum).Minimum
         LastSeen  = ($times | Measure-Object -Maximum).Maximum
         Sample    = $firstPrompt
+        Closed    = [bool]$closedAt -and $closedAt -gt $lastPrompt
     }
 }
 
@@ -434,11 +484,16 @@ function End-Frame {
     $script:FrameBuffer = $null
 }
 
+function Get-ClosedBadge($Session) {
+    if ($Session.Closed) { return 'closed  ' }
+    return ''
+}
+
 function Format-SessionLine($Session) {
     $line = '{0}  {1}  {2,3} prompts  {3}' -f $Session.Id.Substring(0, 8),
                                               $Session.LastSeen.ToString('MM-dd HH:mm'),
                                               $Session.Prompts,
-                                              $Session.Cwd
+                                              ((Get-ClosedBadge $Session) + $Session.Cwd)
     if ($Session.Title) { $line += '  — ' + $Session.Title }
     return $line
 }
@@ -485,11 +540,12 @@ function Get-SessionLayout($Session, [int]$Width) {
     $meta = '{0}  {1}  {2,3} prompts  ' -f $Session.Id.Substring(0, 8),
                                             $Session.LastSeen.ToString('MM-dd HH:mm'),
                                             $Session.Prompts
+    $badge = Get-ClosedBadge $Session
     $oneLineWidth = $Width - $prefixWidth
-    $combined = if ($Session.Title) { '{0}{1}  — {2}' -f $meta, $Session.Cwd, $Session.Title } else { $meta + $Session.Cwd }
+    $combined = if ($Session.Title) { '{0}{1}{2}  — {3}' -f $meta, $badge, $Session.Cwd, $Session.Title } else { $meta + $badge + $Session.Cwd }
     $twoRow = [bool]$Session.Title -and $combined.Length -gt $oneLineWidth
 
-    return @{ Meta = $meta; Cwd = $Session.Cwd; Title = $Session.Title; TwoRow = $twoRow; RowCount = $(if ($twoRow) { 2 } else { 1 }) }
+    return @{ Meta = $meta; Badge = $badge; Cwd = $Session.Cwd; Title = $Session.Title; TwoRow = $twoRow; RowCount = $(if ($twoRow) { 2 } else { 1 }) }
 }
 
 function Write-SessionRow($Session, [bool]$IsCursor, [bool]$IsChosen, [int]$Width) {
@@ -497,24 +553,29 @@ function Write-SessionRow($Session, [bool]$IsCursor, [bool]$IsChosen, [int]$Widt
     $prefix = '{0} {1} ' -f $(if ($IsCursor) { '>' } else { ' ' }), $(if ($IsChosen) { '[x]' } else { '[ ]' })
     $titleSuffix = if (-not $layout.TwoRow -and $layout.Title) { '  — ' + $layout.Title } else { '' }
 
-    if ($IsCursor -or -not $IsChosen) {
-        $uniform = if ($IsCursor) { @{ ForegroundColor = 'Black'; BackgroundColor = 'Gray' } } else { @{ ForegroundColor = 'DarkGray' } }
-        Write-Truncated ($prefix + $layout.Meta + $layout.Cwd + $titleSuffix) $Width $uniform
+    if ($IsCursor) {
+        $uniform = @{ ForegroundColor = 'Black'; BackgroundColor = 'Gray' }
+        Write-Truncated ($prefix + $layout.Meta + $layout.Badge + $layout.Cwd + $titleSuffix) $Width $uniform
         if ($layout.TwoRow) { Write-Truncated ('      — ' + $layout.Title) $Width $uniform }
         return
     }
 
-    # Chosen and not under the cursor: folder and title each get their own colour so the two
-    # things you actually scan for — where it was, what it was about — stand out from the rest.
-    $segments = @(
-        @{ Text = $prefix + $layout.Meta; Colour = @{} },
-        @{ Text = $layout.Cwd; Colour = @{ ForegroundColor = 'DarkCyan' } }
-    )
-    if ($titleSuffix) { $segments += @{ Text = $titleSuffix; Colour = @{ ForegroundColor = 'DarkYellow' } } }
+    # Chosen: folder and title each get their own colour so the two things you actually scan
+    # for — where it was, what it was about — stand out from the rest. Unticked: all of it dims,
+    # except the closed badge, which says why this one starts out unticked.
+    $dim = @{ ForegroundColor = 'DarkGray' }
+    $baseColour  = if ($IsChosen) { @{} } else { $dim }
+    $cwdColour   = if ($IsChosen) { @{ ForegroundColor = 'DarkCyan' } } else { $dim }
+    $titleColour = if ($IsChosen) { @{ ForegroundColor = 'DarkYellow' } } else { $dim }
+
+    $segments = @(@{ Text = $prefix + $layout.Meta; Colour = $baseColour })
+    if ($layout.Badge) { $segments += @{ Text = $layout.Badge; Colour = @{ ForegroundColor = 'Magenta' } } }
+    $segments += @{ Text = $layout.Cwd; Colour = $cwdColour }
+    if ($titleSuffix) { $segments += @{ Text = $titleSuffix; Colour = $titleColour } }
     Write-Segments $segments $Width
 
     if ($layout.TwoRow) {
-        Write-Segments @(@{ Text = '      — ' + $layout.Title; Colour = @{ ForegroundColor = 'DarkYellow' } }) $Width
+        Write-Segments @(@{ Text = '      — ' + $layout.Title; Colour = $titleColour }) $Width
     }
 }
 
@@ -571,7 +632,10 @@ function Get-Conversation([string]$Path) {
             (($entry.message.content | Where-Object { $_.type -eq 'text' }).text) -join "`n"
         }
         if (-not $text) { continue }
-        if ($entry.type -eq 'user' -and -not (Test-UserAuthored $text)) { continue }
+        if ($entry.type -eq 'user') {
+            $text = Get-TypedText $text
+            if (-not $text) { continue }
+        }
 
         $messages.Add([pscustomobject]@{
             Role = $entry.type
@@ -701,13 +765,20 @@ function Confirm-Cancel {
 }
 
 # Arrow keys to move, space to toggle, enter to confirm. Everything starts selected except
-# sessions declined in an earlier run, because the common case is still "give me all of it" and
-# deselecting two is quicker than selecting twenty — the exception is whatever you already said
-# no to. Returns the chosen sessions, or $null when the user backs out.
+# sessions declined in an earlier run or closed with /done, because the common case is still
+# "give me all of it" and deselecting two is quicker than selecting twenty — the exception is
+# whatever you already said no to. Returns the chosen sessions, or $null when the user backs out.
 function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.HashSet[string]]$DeselectedIds) {
     $chosen = [bool[]]::new($Sessions.Count)
-    for ($i = 0; $i -lt $chosen.Count; $i++) { $chosen[$i] = -not $DeselectedIds.Contains($Sessions[$i].Id) }
-    $remembered = ($chosen | Where-Object { -not $_ }).Count
+    for ($i = 0; $i -lt $chosen.Count; $i++) {
+        $chosen[$i] = -not $Sessions[$i].Closed -and -not $DeselectedIds.Contains($Sessions[$i].Id)
+    }
+    $closedCount = @($Sessions | Where-Object Closed).Count
+    $remembered = ($chosen | Where-Object { -not $_ }).Count - $closedCount
+    # One line for both, not two: the viewport arithmetic below budgets a single line for this.
+    $notes = @()
+    if ($remembered -gt 0) { $notes += '{0} pre-deselected — declined in an earlier run' -f $remembered }
+    if ($closedCount -gt 0) { $notes += '{0} closed with /done' -f $closedCount }
     $cursor = 0
     $offset = 0
 
@@ -747,8 +818,8 @@ function Invoke-SessionPicker([object[]]$Sessions, [System.Collections.Generic.H
         Start-Frame
         Write-Truncated ("Select the sessions to reopen — {0} of {1}" -f ($chosen | Where-Object { $_ }).Count, $Sessions.Count) $width @{ ForegroundColor = 'Cyan' }
         Write-Truncated '↑↓ move   space toggle   a all/none   v view conversation   enter reopen   esc cancel' $width @{ ForegroundColor = 'DarkGray' }
-        if ($remembered -gt 0) {
-            Write-Truncated ("{0} pre-deselected — declined in an earlier run" -f $remembered) $width @{ ForegroundColor = 'DarkGray' }
+        if ($notes.Count -gt 0) {
+            Write-Truncated ($notes -join '   ·   ') $width @{ ForegroundColor = 'DarkGray' }
         }
         Write-Truncated '' $width @{}
 
@@ -1030,20 +1101,36 @@ if ($Include.Count -gt 0) {
     $worked = @($worked | Where-Object { $id = $_.Id; $Include | Where-Object { $id.StartsWith($_) } })
 }
 
+# Choosing is the default. -All skips the list, and so does naming the sessions with -Include,
+# which is already a choice made.
+$interactive = -not $All -and -not $DryRun -and $Include.Count -eq 0
+
+# A session closed with /done stays in the picker, unticked, so it can still be brought back
+# by hand. Without the picker nobody would get that chance, so -All and -DryRun leave it out —
+# but naming it with -Include is a choice made, and wins over the closing.
+$closedIds = @()
+if (-not $interactive -and $Include.Count -eq 0) {
+    $closedIds = @($worked | Where-Object Closed | ForEach-Object { $_.Id.Substring(0, 8) })
+    $worked = @($worked | Where-Object { -not $_.Closed })
+}
+
 Write-Host ("Sessions worked on since {0}: {1}" -f $From.ToString('yyyy-MM-dd HH:mm'), $worked.Count) -ForegroundColor Cyan
 if ($skipped.Count -gt 0) {
     Write-Host ("Already open, left alone: {0}" -f (($skipped | Select-Object -Unique) -join ', ')) -ForegroundColor DarkYellow
 }
+if ($closedIds.Count -gt 0) {
+    Write-Host ("Closed with /done, left alone: {0}" -f ($closedIds -join ', ')) -ForegroundColor DarkYellow
+}
 if ($worked.Count -eq 0) { return }
 
-# Choosing is the default. -All skips the list, and so does naming the sessions with -Include,
-# which is already a choice made.
-if (-not $All -and -not $DryRun -and $Include.Count -eq 0) {
+if ($interactive) {
     if ([Console]::IsInputRedirected) {
         Start-InteractiveConsole $PSBoundParameters
         return
     }
-    $shown = $worked
+    # Closed sessions are not offered to the deselection memory: they start unticked anyway, and
+    # remembering them would leave one unticked even after a new prompt has reopened it.
+    $shown = @($worked | Where-Object { -not $_.Closed })
     $picked = Invoke-SessionPicker $worked $deselected
     # $null means cancelled — nothing was decided, so memory is left alone. An empty but non-null
     # result means every session was deliberately unticked, which is still a decision to remember.

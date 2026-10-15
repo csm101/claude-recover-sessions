@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A single PowerShell script (`scripts/Recover-ClaudeSessions.ps1`) that reopens Claude Code
 sessions after a crash/reboot, one Windows Terminal tab each. No build system, no package
-manager, no test suite — the entire project is that one file plus README.md and CHANGELOG.md.
+manager, no test suite — the entire project is that one file plus README.md and CHANGELOG.md,
+and the optional `/done` command: its source `commands/done.md` and `install.ps1`, which copies
+it into the user's `~/.claude/commands` (or `$CLAUDE_CONFIG_DIR/commands`).
 
 ## Running / trying it out
 
@@ -33,6 +35,16 @@ Everything lives in one file, in pipeline order:
    message (not a tool result, hook output, or injected reminder) inside the `-Days` window —
    this is deliberately **not** based on file mtime, since `claude --resume` rewrites the
    transcript just by loading it, which would make every prior recovery look freshly worked.
+   What counts as typed text is decided by `Get-TypedText`, used by both the selection and the
+   conversation reader: plain text that passes `Test-UserAuthored`, or the `<command-args>` of a
+   command invocation (`/plan <request>`) unless the command is in `$script:HousekeepingCommands`
+   — built-ins like `/plugin enable x` are recorded identically, so only the name tells them apart.
+   The same pass sets `Closed` (`Test-ClosingCommand`): true when the latest `/done` invocation
+   is newer than the latest human prompt, both taken over the whole transcript rather than the
+   window. A prompt command is recorded as a `type:user` entry whose text is the
+   `<command-name>` tag (which `Test-UserAuthored` already rejects), followed by an `isMeta`
+   entry holding the expanded body (which `Test-HumanPrompt` rejects), so neither counts as a
+   prompt that would reopen the session.
 
 2. **Cwd resolution** (`Resolve-SessionCwd`, `ConvertTo-ProjectDirName`) — a session can carry
    more than one recorded cwd if it was continued from a different directory. The one that

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- New `/done` command (`commands/done.md`, installed into your personal Claude Code
+  configuration by `install.ps1`). A session whose last human turn is `/done` counts as
+  concluded: the picker lists it unticked and marked `closed`, and `-All`/`-DryRun` leave it out
+  and name it on a `Closed with /done, left alone:` line. `-Include` still reopens it. A new
+  prompt typed in the session afterwards makes it recoverable again. Nothing is stored outside
+  the transcript, and closed sessions are kept out of `recover-sessions-deselected.json`.
+- A request typed as the arguments of a command (`/plan <request>`, or a custom command or
+  skill given arguments) now counts as a prompt. Before, it was dropped along with the command
+  tags around it, so a session started that way showed a later prompt as its opening, or, if it
+  held nothing else, was not offered at all. Built-in housekeeping commands such as
+  `/plugin enable …` or `/model …` still do not count.
+
 ## 3.2.1
 
 - The picker labelled every session with the title Claude Code generates for it, ignoring the one
