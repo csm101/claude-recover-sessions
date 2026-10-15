@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.3.0
 
 - New `/done` command (`commands/done.md`, installed into your personal Claude Code
   configuration by `install.ps1`). A session whose last human turn is `/done` counts as
