@@ -52,9 +52,14 @@
     window, 'workdir' gives each working directory a window of its own so related conversations
     stay together, 'session' gives every session its own window.
 
+    Whatever is confirmed on the arrangement screen is remembered in
+    recover-sessions-options.json, next to the transcripts, and becomes the starting point of the
+    next run in place of the default. Given here, the value wins for this run only, unless it is
+    confirmed on that screen.
+
 .PARAMETER Order
     Launch order within a window. 'oldest' (default) opens oldest first, which leaves the most
-    recent session as the active tab. 'newest' reverses it.
+    recent session as the active tab. 'newest' reverses it. Remembered like -Grouping.
 
 .PARAMETER NoPrompt
     Skip the confirmation screen that would otherwise let you change grouping and order before
@@ -147,6 +152,7 @@ function Show-Usage {
         '',
         'Sessions already open in another tab are skipped, so running it twice is safe.',
         'Sessions ended with /done (see install.ps1) start unticked, marked closed; -All skips them.',
+        'The grouping and order you confirm are remembered as the defaults for the next run.',
         ''
     )
     foreach ($line in $lines) { Write-Host $line }
@@ -181,6 +187,12 @@ function Get-ClaudeProjectRoot {
 # clone of the repo should not start out claiming to know what you have already declined.
 function Get-DeselectionStorePath {
     return (Join-Path (Get-ClaudeConfigDir) 'recover-sessions-deselected.json')
+}
+
+# Grouping and order as last confirmed on the arrangement screen, so the next recovery starts from
+# the same arrangement instead of the defaults. Kept beside the deselection store, for the same reason.
+function Get-OptionsStorePath {
+    return (Join-Path (Get-ClaudeConfigDir) 'recover-sessions-options.json')
 }
 
 # Claude Code names each project directory after its working directory, flattening the
@@ -416,6 +428,34 @@ function Get-UpdatedDeselection([object[]]$Shown, [object[]]$Picked, [System.Col
         if ($pickedIds.Contains($s.Id)) { $updated.Remove($s.Id) | Out-Null } else { $updated.Add($s.Id) | Out-Null }
     }
     return , $updated
+}
+
+# The values -Grouping and -Order accept. The param block has to spell them out as attribute
+# literals; everything else that needs them reads them from here.
+$script:Groupings = @('single', 'workdir', 'session')
+$script:Orders = @('oldest', 'newest')
+
+# Only values still in those lists come back: a hand-edited or outdated file must not hand the
+# script a grouping it has no case for. Whatever is missing or unreadable is left out, and the
+# caller keeps its default for it.
+function Get-RememberedOptions([string]$Path) {
+    $options = @{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $options }
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        Write-Warning "Could not read $Path, starting with the default grouping and order: $($_.Exception.Message)"
+        return $options
+    }
+    if ($raw.Grouping -in $script:Groupings) { $options.Grouping = [string]$raw.Grouping }
+    if ($raw.Order -in $script:Orders) { $options.Order = [string]$raw.Order }
+    return $options
+}
+
+function Save-RememberedOptions([string]$Path, [string]$Grouping, [string]$Order) {
+    $dir = Split-Path $Path -Parent
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    [ordered]@{ Grouping = $Grouping; Order = $Order } | ConvertTo-Json | Set-Content -LiteralPath $Path -Encoding utf8
 }
 
 # [Console]::WindowWidth throws an invalid-handle error when the output is redirected, which is
@@ -888,8 +928,8 @@ function Get-OrderLabel([string]$Value) {
 # Asked rather than assumed: how the tabs are spread over windows is a matter of taste, and the
 # moment to decide it is when you can see how many sessions came back.
 function Invoke-OptionsPrompt([object[]]$Sessions, [string]$Grouping, [string]$Order) {
-    $groupings = @('single', 'workdir', 'session')
-    $orders = @('oldest', 'newest')
+    $groupings = $script:Groupings
+    $orders = $script:Orders
 
     $width = [Math]::Max(60, (Get-ConsoleSize Width 120) - 1)
     while ($true) {
@@ -1071,6 +1111,13 @@ $prunedDeselected = Get-PrunedDeselection $deselected @($allTranscripts.BaseName
 if ($prunedDeselected.Count -ne $deselected.Count) { Save-DeselectedIds $deselectedPath $prunedDeselected }
 $deselected = $prunedDeselected
 
+# The arrangement confirmed last time is where this run starts, -DryRun's listing included. A
+# -Grouping or -Order on the command line wins over it for this run.
+$optionsPath = Get-OptionsStorePath
+$rememberedOptions = Get-RememberedOptions $optionsPath
+if (-not $PSBoundParameters.ContainsKey('Grouping') -and $rememberedOptions.Grouping) { $Grouping = $rememberedOptions.Grouping }
+if (-not $PSBoundParameters.ContainsKey('Order') -and $rememberedOptions.Order) { $Order = $rememberedOptions.Order }
+
 $skipped = [System.Collections.Generic.List[string]]::new()
 $worked = foreach ($f in $candidates) {
     $s = Get-WorkedSession $f
@@ -1165,6 +1212,9 @@ if (-not $NoPrompt -and -not [Console]::IsInputRedirected) {
     }
     $Grouping = $answer.Grouping
     $Order = $answer.Order
+    # Only a confirmed screen is a decision worth remembering: esc above, and -NoPrompt with a
+    # one-off -Grouping, leave the store as it was.
+    Save-RememberedOptions $optionsPath $Grouping $Order
     $worked = Sort-ForLaunch $worked $Grouping $Order   # the answers may have changed both
 }
 

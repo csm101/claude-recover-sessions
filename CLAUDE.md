@@ -73,7 +73,11 @@ Everything lives in one file, in pipeline order:
 
 5. **Arrangement** (`Invoke-OptionsPrompt`, `Sort-ForLaunch`, `Get-TargetWindow`) — asks how to
    group tabs across windows (`single`/`workdir`/`session`) and launch order
-   (`oldest`/`newest`), unless `-NoPrompt`.
+   (`oldest`/`newest`), unless `-NoPrompt`. The answer confirmed with Enter is saved to
+   `recover-sessions-options.json` next to the deselection store (`Get-RememberedOptions` /
+   `Save-RememberedOptions`) and loaded at startup as the value of `-Grouping`/`-Order` when the
+   command line does not name them. Only values in `$script:Groupings`/`$script:Orders` are taken
+   from the file: the param block's `ValidateSet` would throw on anything else assigned to them.
 
 6. **Launch** (`Open-Session`) — shells out to `wt.exe new-tab` per session (falling back to
    `Start-Process` per window if Windows Terminal isn't installed), running

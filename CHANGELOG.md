@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- The grouping and order confirmed on the arrangement screen are remembered in
+  `recover-sessions-options.json` (next to the transcripts) and become the starting point of the
+  next run, `-DryRun` and `-NoPrompt` included, instead of `single`/`oldest`. `-Grouping` and
+  `-Order` on the command line still win for that run, and are remembered only if confirmed on
+  the screen. Cancelling with `esc` changes nothing; deleting the file restores the defaults.
+
 ## 3.3.0
 
 - New `/done` command (`commands/done.md`, installed into your personal Claude Code

@@ -182,11 +182,20 @@ conversations about the same repository stay together), or one window per sessio
 order within each window. The window count updates as you cycle, which is usually what decides
 it.
 
+What you confirm with `enter` is remembered: the next run starts from the same grouping and
+order instead of the defaults, on this screen, in `-DryRun`'s listing and with `-NoPrompt`. The
+memory lives in `recover-sessions-options.json` next to the transcripts (`~/.claude`, or
+`$CLAUDE_CONFIG_DIR`); deleting it brings back `single` and `oldest`. Cancelling with `esc` leaves
+it as it was.
+
 Both are also parameters, and passing `-NoPrompt` skips the screen:
 
 ```powershell
 .\scripts\Recover-ClaudeSessions.ps1 3 -Grouping workdir -Order newest -NoPrompt
 ```
+
+A value given on the command line wins over the remembered one for that run. It replaces the
+remembered one only if you confirm it on the screen; with `-NoPrompt` it is a one-off.
 
 ### Forwarding arguments
 
@@ -217,8 +226,8 @@ is a console UI on a desktop you are not sitting at, so pass `-All` or `-Include
 | `-Include`      | —       | Reopen only these session ids, full or partial, comma-separated. |
 | `-Exclude`      | —       | Session ids, full or partial, to leave alone. |
 | `-SampleLines`  | `10`    | How many lines of each opening prompt to show. |
-| `-Grouping`     | `single`| `single`, `workdir` or `session` — how tabs are spread over windows. |
-| `-Order`        | `oldest`| `oldest` or `newest` — launch order within a window. |
+| `-Grouping`     | `single`| `single`, `workdir` or `session` — how tabs are spread over windows. Once confirmed on the screen, the default is the last choice. |
+| `-Order`        | `oldest`| `oldest` or `newest` — launch order within a window. Remembered like `-Grouping`. |
 | `-NoPrompt`     | off     | Skip the grouping/order screen. |
 | `-WindowName`   | `0`     | Target window. `0` reuses the current one; any other string groups the tabs in a window of its own. |
 | *anything else* | —       | Forwarded verbatim to every `claude` invocation. |
