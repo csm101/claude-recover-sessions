@@ -7,6 +7,11 @@
   next run, `-DryRun` and `-NoPrompt` included, instead of `single`/`oldest`. `-Grouping` and
   `-Order` on the command line still win for that run, and are remembered only if confirmed on
   the screen. Cancelling with `esc` changes nothing; deleting the file restores the defaults.
+- Prompts sent by `claude -p` or the Agent SDK (transcript entries whose `entrypoint` is
+  `sdk-cli`, `sdk-ts`, ...) no longer count as typed. Before, every scripted run was offered for
+  reopening: it had to be closed by hand with `/done`, or it was skipped with a "working directory
+  is gone" warning once its scratch folder was deleted. A session started that way and later
+  worked on interactively still counts, from the prompts typed in it.
 
 ## 3.3.0
 

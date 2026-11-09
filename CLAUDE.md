@@ -32,7 +32,8 @@ Everything lives in one file, in pipeline order:
    `*.jsonl` transcript under `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR`) line-by-line,
    pre-filtering with a regex (`"type":"user"`) before handing candidate lines to `ConvertFrom-Json`,
    because transcripts get large. A session only counts as "worked on" if it has a human-authored
-   message (not a tool result, hook output, or injected reminder) inside the `-Days` window —
+   message (not a tool result, hook output, injected reminder, or a prompt from `claude -p`/the
+   Agent SDK, i.e. an entry whose `entrypoint` is `sdk-*`) inside the `-Days` window —
    this is deliberately **not** based on file mtime, since `claude --resume` rewrites the
    transcript just by loading it, which would make every prior recovery look freshly worked.
    What counts as typed text is decided by `Get-TypedText`, used by both the selection and the

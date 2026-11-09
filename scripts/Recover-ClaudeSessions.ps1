@@ -305,6 +305,11 @@ function Get-WorkedSession([System.IO.FileInfo]$Jsonl) {
         }
         try { $entry = $line | ConvertFrom-Json } catch { continue }
         if ($entry.cwd -and -not $cwds.Contains($entry.cwd)) { $cwds.Add($entry.cwd) }
+        # A prompt handed over by `claude -p` or the Agent SDK (entrypoint sdk-cli, sdk-ts, ...)
+        # was sent by a program, not typed: a scripted run is nothing to reopen, and it often ran
+        # in a scratch folder deleted since. Only that turn is ignored, not the session, so one
+        # resumed interactively and worked on still counts. Older entries carry no entrypoint.
+        if ($entry.entrypoint -like 'sdk-*') { continue }
         if (-not (Test-HumanPrompt $entry)) { continue }
 
         $when = ([datetime]$entry.timestamp).ToLocalTime()

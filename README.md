@@ -54,6 +54,12 @@ command or skill given arguments, counts as a prompt, and it is what the list sh
 the session. Built-in housekeeping such as `/plugin enable …` or `/model …` does not count: it
 configures Claude Code rather than asking for work.
 
+A prompt passed to `claude -p`, or sent through the Agent SDK, is not a human turn either: a
+program sent it. Scripted runs therefore never show up, and neither does the warning about a
+missing working directory that they used to trigger once their scratch folder was deleted. A
+session started that way and later resumed and worked on interactively still counts, from the
+prompts you typed in it.
+
 ## Requirements
 
 - Windows, PowerShell 5.1 or 7+
